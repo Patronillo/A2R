@@ -1,0 +1,5 @@
+{
+  "name": "A2R",
+  "description": "Sistema de gestão de inventário para aluguer de equipamentos para eventos, com gestão de entregas e recolhas.",
+  "requestFramePermissions": ["camera"]
+}
