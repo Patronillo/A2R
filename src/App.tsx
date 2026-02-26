@@ -22,6 +22,7 @@ import {
   Phone,
   Printer,
   Download,
+  Calendar,
   User as UserIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -29,7 +30,7 @@ import { PhotoUpload } from './components/PhotoUpload';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history';
+type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar';
 
 export default function App() {
   const [view, setView] = useState<View>('login');
@@ -82,13 +83,45 @@ export default function App() {
   const [showOutputForm, setShowOutputForm] = useState(false);
   const [showInputForm, setShowInputForm] = useState(false);
   const [outputSearch, setOutputSearch] = useState('');
-  const [outputStatusFilter, setOutputStatusFilter] = useState<'ALL' | 'ACTIVE' | 'SETTLED'>('ALL');
+  const [outputStatusFilter, setOutputStatusFilter] = useState<'ALL' | 'ACTIVE' | 'SETTLED'>('ACTIVE');
+  const [outputStartDate, setOutputStartDate] = useState('2026-01-01');
   const [expandedOutputs, setExpandedOutputs] = useState<Record<number, boolean>>({});
   const [inputSearch, setInputSearch] = useState('');
+  const [inputStatusFilter, setInputStatusFilter] = useState<'ACTIVE' | 'COMPLETED' | 'ALL'>('ACTIVE');
+  const [inputStartDate, setInputStartDate] = useState('2026-01-01');
   const [showArticleSearchModal, setShowArticleSearchModal] = useState(false);
   const [articleSearchQuery, setArticleSearchQuery] = useState('');
   const [historyArticleFilter, setHistoryArticleFilter] = useState('');
   const [historyStartDate, setHistoryStartDate] = useState('2026-01-01');
+  const [calendarDate, setCalendarDate] = useState(new Date().toISOString().split('T')[0]);
+  const [outputFormTab, setOutputFormTab] = useState<'info' | 'items'>('info');
+
+  const articleCodeInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Handle browser back button
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      if (event.state && event.state.view) {
+        setView(event.state.view);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    
+    // Set initial state
+    if (!window.history.state) {
+      window.history.replaceState({ view: 'login' }, '', '');
+    }
+    
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Sync view changes to history
+  useEffect(() => {
+    if (window.history.state?.view !== view) {
+      window.history.pushState({ view }, '', '');
+    }
+    window.scrollTo(0, 0);
+  }, [view]);
 
   useEffect(() => {
     if (user) {
@@ -278,6 +311,11 @@ export default function App() {
     
     setSelectedArticleId('');
     setSelectedQuantity(1);
+    
+    // Focus back on article code input
+    setTimeout(() => {
+      articleCodeInputRef.current?.focus();
+    }, 100);
   };
 
   const removeItemFromOutput = (articleId: number) => {
@@ -534,8 +572,16 @@ export default function App() {
       }
     });
 
-    const pdfData = doc.output('datauristring');
-    setPdfPreview({ url: pdfData, output });
+    const blob = doc.output('blob');
+    const url = URL.createObjectURL(blob);
+    setPdfPreview({ url, output });
+  };
+
+  const closePdfPreview = () => {
+    if (pdfPreview?.url.startsWith('blob:')) {
+      URL.revokeObjectURL(pdfPreview.url);
+    }
+    setPdfPreview(null);
   };
 
   const handleDeleteMovement = async (id: number) => {
@@ -648,7 +694,21 @@ export default function App() {
 
   if (view === 'login') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50">
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50 relative">
+        <div className="absolute top-6 right-6">
+          <button 
+            onClick={() => {
+              if (window.confirm('Deseja realmente sair e fechar a aplicação?')) {
+                window.close();
+                window.location.href = "about:blank";
+              }
+            }} 
+            className="p-3 bg-red-50 text-red-600 rounded-xl font-bold hover:bg-red-100 transition-all shadow-sm"
+            title="Sair"
+          >
+            <LogOut size={20} />
+          </button>
+        </div>
         <Logo />
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
@@ -901,7 +961,7 @@ export default function App() {
   return (
     <div className="h-screen flex flex-col bg-slate-50 overflow-hidden">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-4 z-10">
+      <header className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 z-30 shadow-sm">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-slate-100 overflow-hidden border border-slate-200">
@@ -971,6 +1031,16 @@ export default function App() {
               </button>
 
               <button
+                onClick={() => setView('calendar')}
+                className="flex flex-col items-center justify-center p-8 bg-white rounded-3xl shadow-lg border border-slate-100 hover:shadow-xl hover:scale-105 transition-all group"
+              >
+                <div className="w-16 h-16 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 mb-4 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                  <Calendar size={32} />
+                </div>
+                <span className="text-lg font-bold text-slate-800">Calendário</span>
+              </button>
+
+              <button
                 onClick={() => setView('history')}
                 className="flex flex-col items-center justify-center p-8 bg-white rounded-3xl shadow-lg border border-slate-100 hover:shadow-xl hover:scale-105 transition-all group"
               >
@@ -994,17 +1064,17 @@ export default function App() {
                 <h2 className="text-2xl font-bold text-slate-800">Artigos</h2>
                 <div className="flex gap-2">
                   <button 
-                    onClick={() => setView('menu')}
-                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
-                  >
-                    <LayoutGrid size={24} />
-                  </button>
-                  <button 
                     onClick={() => setView('add-article')}
                     className="flex items-center gap-2 px-4 py-2 a2r-gradient text-white rounded-xl font-medium shadow-lg shadow-blue-200"
                   >
                     <Plus size={18} />
                     Novo Artigo
+                  </button>
+                  <button 
+                    onClick={() => setView('menu')}
+                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <X size={24} />
                   </button>
                 </div>
               </div>
@@ -1141,7 +1211,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-slate-700 mb-1">Altura (cm)</label>
                       <input 
                         type="number" 
-                        step="0.1"
+                        step="0.01"
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                         value={editingArticle.height ?? ''}
                         onChange={e => setEditingArticle({...editingArticle, height: parseFloat(e.target.value) || 0})}
@@ -1151,7 +1221,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-slate-700 mb-1">Largura (cm)</label>
                       <input 
                         type="number" 
-                        step="0.1"
+                        step="0.01"
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                         value={editingArticle.width ?? ''}
                         onChange={e => setEditingArticle({...editingArticle, width: parseFloat(e.target.value) || 0})}
@@ -1161,7 +1231,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-slate-700 mb-1">Compr. (cm)</label>
                       <input 
                         type="number" 
-                        step="0.1"
+                        step="0.01"
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                         value={editingArticle.length ?? ''}
                         onChange={e => setEditingArticle({...editingArticle, length: parseFloat(e.target.value) || 0})}
@@ -1205,6 +1275,161 @@ export default function App() {
                   </div>
                 </div>
               </form>
+            </motion.div>
+          )}
+
+          {view === 'calendar' && (
+            <motion.div
+              key="calendar"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="flex flex-col h-full space-y-6"
+            >
+              <div className="flex items-center justify-between shrink-0">
+                <h2 className="text-2xl font-bold text-slate-800">Calendário</h2>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => setCalendarDate(new Date().toISOString().split('T')[0])}
+                    className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl font-medium hover:bg-slate-200 transition-all"
+                  >
+                    Hoje
+                  </button>
+                  <button 
+                    onClick={() => setView('menu')}
+                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm shrink-0">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600">
+                    <Calendar size={24} />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Data Selecionada</label>
+                    <input 
+                      type="date" 
+                      className="w-full px-0 py-0 text-xl font-bold text-slate-800 bg-transparent border-none outline-none focus:ring-0 cursor-pointer"
+                      value={calendarDate}
+                      onChange={e => setCalendarDate(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 space-y-8 custom-scrollbar pb-20">
+                {/* Entregas Section */}
+                <section className="space-y-4">
+                  <div className="flex items-center gap-2 px-2">
+                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                    <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Entregas do Dia</h3>
+                  </div>
+                  {(() => {
+                    const dayOutputs = outputs.filter(o => o.delivery_date?.split('T')[0] === calendarDate);
+                    if (dayOutputs.length === 0) return <p className="text-sm text-slate-400 italic px-2">Nenhuma entrega agendada para este dia.</p>;
+                    return dayOutputs.map(output => (
+                      <div key={`cal-out-${output.id}`} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all">
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <span className="text-[10px] font-bold text-red-500 uppercase bg-red-50 px-2 py-0.5 rounded">#{output.id}</span>
+                            <h4 className="font-bold text-slate-800 mt-1">{output.client_name}</h4>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs font-bold text-slate-600">{new Date(output.delivery_date!).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                            <p className="text-[10px] text-slate-400 uppercase font-medium">{output.type}</p>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-500 flex items-center gap-1">
+                          <MapPin size={12} />
+                          {output.location_name}
+                        </p>
+                      </div>
+                    ));
+                  })()}
+                </section>
+
+                {/* Recolhas Ativas Section */}
+                <section className="space-y-4">
+                  <div className="flex items-center gap-2 px-2">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                    <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Recolhas Ativas (Agendadas)</h3>
+                  </div>
+                  {(() => {
+                    const dayActiveRecolhas = outputs.filter(o => 
+                      o.collection_date?.split('T')[0] === calendarDate && 
+                      o.items?.some(item => item.quantity_out > item.quantity_in)
+                    );
+                    if (dayActiveRecolhas.length === 0) return <p className="text-sm text-slate-400 italic px-2">Nenhuma recolha ativa agendada para este dia.</p>;
+                    return dayActiveRecolhas.map(output => (
+                      <div key={`cal-act-${output.id}`} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all border-l-4 border-l-emerald-500">
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <span className="text-[10px] font-bold text-emerald-500 uppercase bg-emerald-50 px-2 py-0.5 rounded">#{output.id}</span>
+                            <h4 className="font-bold text-slate-800 mt-1">{output.client_name}</h4>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs font-bold text-slate-600">{new Date(output.collection_date!).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
+                            <p className="text-[10px] text-slate-400 uppercase font-medium">{output.items?.filter(i => i.quantity_out > i.quantity_in).length} Artigos Pendentes</p>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-500 flex items-center gap-1">
+                          <MapPin size={12} />
+                          {output.location_name}
+                        </p>
+                      </div>
+                    ));
+                  })()}
+                </section>
+
+                {/* Recolhas Efetuadas Section */}
+                <section className="space-y-4">
+                  <div className="flex items-center gap-2 px-2">
+                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                    <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Recolhas Efetuadas</h3>
+                  </div>
+                  {(() => {
+                    const dayMovements = movements.filter(m => 
+                      m.type === 'IN' && 
+                      m.date.split('T')[0] === calendarDate &&
+                      (m.observations?.includes('Recolha') || m.observations?.includes('Retorno'))
+                    );
+                    if (dayMovements.length === 0) return <p className="text-sm text-slate-400 italic px-2">Nenhuma recolha efetuada neste dia.</p>;
+                    return dayMovements.map(movement => (
+                      <div key={`cal-mov-${movement.id}`} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all border-l-4 border-l-blue-500">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-500">
+                              <Package size={16} />
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-slate-800 text-sm">{movement.article_description}</h4>
+                              <p className="text-[10px] text-slate-400 font-mono">{movement.article_code}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-lg font-black text-blue-600">{movement.quantity}</p>
+                            <p className="text-[10px] text-blue-400 font-bold uppercase">Unidades</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-50">
+                          <p className="text-[10px] text-slate-400 flex items-center gap-1">
+                            <Clock size={10} />
+                            {new Date(movement.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                          </p>
+                          <p className="text-[10px] text-slate-400 flex items-center gap-1">
+                            <UserIcon size={10} />
+                            {movement.user_name}
+                          </p>
+                        </div>
+                      </div>
+                    ));
+                  })()}
+                </section>
+              </div>
             </motion.div>
           )}
 
@@ -1265,6 +1490,7 @@ export default function App() {
                         article_id: item.article_id,
                         quantity: item.quantity_out,
                         client_name: o.client_name,
+                        client_contact: o.client_contact,
                         location_name: o.location_name,
                         space_at_location: o.space_at_location,
                         delivery_type: o.type,
@@ -1290,6 +1516,8 @@ export default function App() {
                       quantity: m.quantity,
                       observations: m.observations,
                       user_name: m.user_name,
+                      client_name: relatedOutput?.client_name || '',
+                      client_contact: relatedOutput?.client_contact || '',
                       location_name: relatedOutput?.location_name || '',
                       space_at_location: relatedOutput?.space_at_location || '',
                       delivery_type: relatedOutput?.type || ''
@@ -1363,6 +1591,11 @@ export default function App() {
                           <div className="flex-1 min-w-0">
                             <h3 className="text-sm font-bold text-slate-800 truncate">{item.article_description}</h3>
                             <p className="text-[10px] text-slate-400 font-mono truncate">{item.article_code}</p>
+                            {item.client_name && (
+                              <p className="text-[10px] text-slate-500 font-medium truncate mt-0.5">
+                                {item.client_name} {item.client_contact ? `(${item.client_contact})` : ''}
+                              </p>
+                            )}
                           </div>
 
                           <div className="text-right">
@@ -1400,7 +1633,7 @@ export default function App() {
             >
               <div className="flex items-center justify-between shrink-0">
                 <h2 className="text-2xl font-bold text-slate-800">
-                  {showInputForm ? 'Nova Recolha' : 'Recolhas'}
+                  {showInputForm ? (editingMovementId ? 'Editar Recolha' : 'Nova Recolha') : 'Recolhas'}
                 </h2>
                 <div className="flex gap-2">
                   <button 
@@ -1421,12 +1654,14 @@ export default function App() {
                     {showInputForm ? <X size={18} /> : <Plus size={18} />}
                     {showInputForm ? 'Cancelar' : 'Nova Recolha'}
                   </button>
-                  <button 
-                    onClick={() => setView('menu')}
-                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
-                  >
-                    <X size={24} />
-                  </button>
+                  {!showInputForm && (
+                    <button 
+                      onClick={() => setView('menu')}
+                      className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                    >
+                      <X size={24} />
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1435,7 +1670,23 @@ export default function App() {
                   <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
                     {editingMovementId ? (
                       <div className="space-y-6">
-                        <h3 className="text-lg font-semibold text-slate-700">Editar Recolha #{editingMovementId}</h3>
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-xl font-bold text-emerald-600">Editar Recolha #{editingMovementId}</h3>
+                          <button 
+                            onClick={() => handleDeleteMovement(editingMovementId)}
+                            className="p-2 text-red-400 hover:text-red-600 transition-colors"
+                            title="Eliminar Recolha"
+                          >
+                            <Trash2 size={20} />
+                          </button>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Artigo</label>
+                          <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                            <p className="font-bold text-slate-800">{movements.find(m => m.id === editingMovementId)?.article_description}</p>
+                            <p className="text-xs text-slate-500">{movements.find(m => m.id === editingMovementId)?.article_code}</p>
+                          </div>
+                        </div>
                         <div>
                           <label className="block text-sm font-medium text-slate-700 mb-1">Quantidade</label>
                           <input 
@@ -1458,9 +1709,9 @@ export default function App() {
                     ) : (
                       <div className="space-y-6">
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Selecionar Entrega para Recolha</label>
+                          <label className="block text-lg font-bold text-emerald-600 mb-2">Selecionar Entrega para Recolha</label>
                           <select 
-                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                            className="w-full px-4 py-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500 text-lg"
                             value={selectedOutputId}
                             onChange={e => {
                               const outId = e.target.value;
@@ -1560,163 +1811,387 @@ export default function App() {
                 </div>
               ) : (
                 <div className="flex flex-col h-full space-y-6 overflow-hidden">
-                  <div className="relative shrink-0">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-                    <input 
-                      type="text" 
-                      placeholder="Pesquisar por cliente ou local..."
-                      className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500 bg-white shadow-sm"
-                      value={inputSearch}
-                      onFocus={() => setInputSearch('')}
-                      onChange={e => setInputSearch(e.target.value)}
-                    />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 shrink-0">
+                    <div className="relative">
+                      <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                      <input 
+                        type="text" 
+                        placeholder="Pesquisar por cliente ou local..."
+                        className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500 bg-white shadow-sm"
+                        value={inputSearch}
+                        onFocus={() => setInputSearch('')}
+                        onChange={e => setInputSearch(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-slate-500 whitespace-nowrap">Desde:</span>
+                      <input 
+                        type="date" 
+                        className="flex-1 px-4 py-2 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                        value={inputStartDate}
+                        onChange={e => setInputStartDate(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 shrink-0 overflow-x-auto pb-2">
+                    <button 
+                      onClick={() => setInputStatusFilter('ACTIVE')}
+                      className={`px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${
+                        inputStatusFilter === 'ACTIVE' 
+                          ? 'bg-emerald-500 text-white shadow-md' 
+                          : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
+                      }`}
+                    >
+                      Ativas
+                    </button>
+                    <button 
+                      onClick={() => setInputStatusFilter('COMPLETED')}
+                      className={`px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${
+                        inputStatusFilter === 'COMPLETED' 
+                          ? 'bg-emerald-500 text-white shadow-md' 
+                          : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
+                      }`}
+                    >
+                      Efetuadas
+                    </button>
+                    <button 
+                      onClick={() => setInputStatusFilter('ALL')}
+                      className={`px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${
+                        inputStatusFilter === 'ALL' 
+                          ? 'bg-emerald-500 text-white shadow-md' 
+                          : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
+                      }`}
+                    >
+                      Todas
+                    </button>
                   </div>
 
                   <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
-                    {outputs
-                      .filter(o => {
+                    {(() => {
+                      const activeOutputs = outputs.filter(o => {
                         const isSettled = o.items?.every(item => item.quantity_out === item.quantity_in);
                         const isActive = !isSettled;
                         const matchesSearch = o.client_name.toLowerCase().includes(inputSearch.toLowerCase()) || 
                                             o.location_name?.toLowerCase().includes(inputSearch.toLowerCase());
-                        return isActive && matchesSearch;
-                      })
-                      .sort((a, b) => {
-                        const dateA = a.delivery_date ? new Date(a.delivery_date).getTime() : 0;
-                        const dateB = b.delivery_date ? new Date(b.delivery_date).getTime() : 0;
-                        return dateB - dateA;
-                      })
-                      .map(output => {
-                        const isExpanded = expandedOutputs[output.id];
+                        const matchesDate = !inputStartDate || (o.collection_date && o.collection_date >= inputStartDate);
+                        return isActive && matchesSearch && matchesDate;
+                      }).map(o => ({ ...o, listType: 'ACTIVE' as const }));
 
-                        return (
-                          <div key={output.id} className="bg-white rounded-3xl border border-slate-100 shadow-lg hover:shadow-xl transition-all overflow-hidden">
-                            <div className="p-6">
-                              <div className="flex justify-between items-start">
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                      output.type === 'ALUGUER' ? 'bg-blue-100 text-blue-600' :
-                                      output.type === 'SERVIÇO' ? 'bg-emerald-100 text-emerald-600' :
-                                      output.type === 'REPARAÇÃO' ? 'bg-orange-100 text-orange-600' :
-                                      'bg-slate-100 text-slate-600'
-                                    }`}>
-                                      {output.type}
-                                    </span>
-                                    <span className="text-xs text-slate-400 font-medium">#{output.id}</span>
-                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-50 text-emerald-500 border border-emerald-100">
-                                      Ativa
-                                    </span>
-                                  </div>
-                                  <h3 className="text-lg font-bold text-slate-800">{output.client_name}</h3>
-                                  <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
-                                    <p className="text-sm text-slate-500 flex items-center gap-1">
-                                      <MapPin size={14} className="text-slate-400" />
-                                      {output.location_name} {output.space_at_location && `(${output.space_at_location})`}
-                                    </p>
-                                    {output.client_contact && (
-                                      <p className="text-sm text-slate-500 flex items-center gap-1">
-                                        <Phone size={14} className="text-slate-400" />
-                                        {output.client_contact}
-                                      </p>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex flex-col items-end gap-2">
-                                  <button 
-                                    onClick={() => {
-                                      setSelectedOutputId(output.id.toString());
-                                      const initialReturns: Record<number, number> = {};
-                                      output.items?.forEach(item => {
-                                        initialReturns[item.article_id] = item.quantity_out - item.quantity_in;
-                                      });
-                                      setReturnItems(initialReturns);
-                                      setShowInputForm(true);
-                                    }}
-                                    className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-sm font-bold shadow-md hover:bg-emerald-600 transition-all"
-                                  >
-                                    Nova Recolha
-                                  </button>
-                                </div>
-                              </div>
+                      const completedMovements = movements.filter(m => {
+                        if (m.type !== 'IN' || !m.observations?.includes('Recolha')) return false;
+                        const outputIdMatch = m.observations?.match(/#(\d+)/);
+                        const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
+                        const relatedOutput = outputId ? outputs.find(o => o.id === outputId) : null;
+                        
+                        const matchesSearch = (relatedOutput?.client_name.toLowerCase().includes(inputSearch.toLowerCase()) || 
+                                             relatedOutput?.location_name?.toLowerCase().includes(inputSearch.toLowerCase()) ||
+                                             m.article_description.toLowerCase().includes(inputSearch.toLowerCase()));
+                        const matchesDate = !inputStartDate || (m.date && m.date >= inputStartDate);
+                        return matchesSearch && matchesDate;
+                      }).map(m => {
+                        const outputIdMatch = m.observations?.match(/#(\d+)/);
+                        const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
+                        const relatedOutput = outputId ? outputs.find(o => o.id === outputId) : null;
+                        return { ...m, listType: 'COMPLETED' as const, relatedOutput };
+                      });
 
-                              <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-slate-400">
-                                <div>
-                                  <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
-                                  <p className="text-slate-600 font-medium">
-                                    {output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
-                                    {output.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
-                                  </p>
-                                </div>
-                                <div>
-                                  <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
-                                  <p className="text-slate-600 font-medium">
-                                    {output.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}
-                                    {output.assembly_date && <span className="block text-[10px] opacity-70">{new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
-                                  </p>
-                                </div>
-                                <div>
-                                  <p className="uppercase tracking-wider font-semibold mb-1">Recolha</p>
-                                  <p className="text-slate-600 font-medium">
-                                    {output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}
-                                    {output.collection_date && <span className="block text-[10px] opacity-70">{new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
-                                  </p>
-                                </div>
-                                <div>
-                                  <p className="uppercase tracking-wider font-semibold mb-1">Artigos</p>
-                                  <p className="text-slate-600 font-medium">{output.items?.length || 0} Itens</p>
-                                  <button 
-                                    onClick={() => setExpandedOutputs({...expandedOutputs, [output.id]: !isExpanded})}
-                                    className="flex items-center gap-1 text-a2r-blue-dark font-bold hover:underline mt-1"
-                                  >
-                                    {isExpanded ? 'Ocultar' : 'Ver'}
-                                    {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                                  </button>
-                                </div>
-                              </div>
+                      let displayList: any[] = [];
+                      if (inputStatusFilter === 'ACTIVE') displayList = activeOutputs;
+                      else if (inputStatusFilter === 'COMPLETED') displayList = completedMovements;
+                      else displayList = [...activeOutputs, ...completedMovements];
 
-                              <AnimatePresence>
-                                {isExpanded && (
-                                  <motion.div 
-                                    initial={{ height: 0, opacity: 0 }}
-                                    animate={{ height: 'auto', opacity: 1 }}
-                                    exit={{ height: 0, opacity: 0 }}
-                                    className="mt-6 pt-6 border-t border-slate-50 overflow-hidden"
-                                  >
-                                    <div className="bg-slate-50 rounded-2xl p-4">
-                                      <p className="text-xs font-bold text-slate-400 uppercase mb-3 tracking-widest">Artigos Pendentes</p>
-                                      <div className="space-y-3">
-                                        {output.items?.map(item => (
-                                          <div key={item.id} className="flex justify-between items-center text-sm">
-                                            <div className="flex-1">
-                                              <span className="text-slate-700 font-medium block">{item.article_description}</span>
-                                              <span className="text-[10px] text-slate-400 font-mono">{item.article_code}</span>
-                                            </div>
-                                            <div className="flex items-center gap-4">
-                                              <div className="text-center">
-                                                <p className="text-[10px] text-slate-400 uppercase font-bold">Entrega</p>
-                                                <p className="text-red-500 font-bold">{item.quantity_out}</p>
-                                              </div>
-                                              <div className="text-center">
-                                                <p className="text-[10px] text-slate-400 uppercase font-bold">Recolha</p>
-                                                <p className="text-emerald-500 font-bold">{item.quantity_in}</p>
-                                              </div>
-                                              <div className="text-center bg-white px-3 py-1 rounded-lg border border-slate-100">
-                                                <p className="text-[10px] text-slate-400 uppercase font-bold">Pendente</p>
-                                                <p className="text-slate-800 font-extrabold">{item.quantity_out - item.quantity_in}</p>
-                                              </div>
-                                            </div>
-                                          </div>
-                                        ))}
+                      return displayList
+                        .sort((a, b) => {
+                          const dateA = a.listType === 'ACTIVE' ? (a.collection_date || '0') : a.date;
+                          const dateB = b.listType === 'ACTIVE' ? (b.collection_date || '0') : b.date;
+                          return dateA.localeCompare(dateB); // Oldest to newest
+                        })
+                        .map(item => {
+                          if (item.listType === 'ACTIVE') {
+                            const output = item;
+                            const isExpanded = expandedOutputs[output.id];
+
+                            return (
+                              <div key={`active-${output.id}`} className="bg-white rounded-3xl border border-slate-100 shadow-lg hover:shadow-xl transition-all overflow-hidden">
+                                <div className="p-6">
+                                  <div className="flex justify-between items-start">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2 mb-1">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                          output.type === 'ALUGUER' ? 'bg-blue-100 text-blue-600' :
+                                          output.type === 'SERVIÇO' ? 'bg-emerald-100 text-emerald-600' :
+                                          output.type === 'REPARAÇÃO' ? 'bg-orange-100 text-orange-600' :
+                                          'bg-slate-100 text-slate-600'
+                                        }`}>
+                                          {output.type}
+                                        </span>
+                                        <span className="text-xs text-slate-400 font-medium">#{output.id}</span>
+                                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-50 text-emerald-500 border border-emerald-100">
+                                          Ativa
+                                        </span>
+                                      </div>
+                                      <h3 className="text-lg font-bold text-slate-800">{output.client_name}</h3>
+                                      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+                                        <p className="text-sm text-slate-500 flex items-center gap-1">
+                                          <MapPin size={14} className="text-slate-400" />
+                                          {output.location_name} {output.space_at_location && `(${output.space_at_location})`}
+                                        </p>
+                                        {output.client_contact && (
+                                          <p className="text-sm text-slate-500 flex items-center gap-1">
+                                            <Phone size={14} className="text-slate-400" />
+                                            {output.client_contact}
+                                          </p>
+                                        )}
                                       </div>
                                     </div>
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
-                            </div>
-                          </div>
-                        );
-                      })}
+                                    <div className="flex flex-col items-end gap-2">
+                                      <button 
+                                        onClick={() => {
+                                          setSelectedOutputId(output.id.toString());
+                                          const initialReturns: Record<number, number> = {};
+                                          output.items?.forEach(item => {
+                                            initialReturns[item.article_id] = item.quantity_out - item.quantity_in;
+                                          });
+                                          setReturnItems(initialReturns);
+                                          setShowInputForm(true);
+                                        }}
+                                        className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-sm font-bold shadow-md hover:bg-emerald-600 transition-all"
+                                      >
+                                        Nova Recolha
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-slate-400">
+                                    <div>
+                                      <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
+                                      <p className="text-slate-600 font-medium">
+                                        {output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
+                                        {output.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                      </p>
+                                    </div>
+                                    <div>
+                                      <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
+                                      <p className="text-slate-600 font-medium">
+                                        {output.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}
+                                        {output.assembly_date && <span className="block text-[10px] opacity-70">{new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                      </p>
+                                    </div>
+                                    <div>
+                                      <p className="uppercase tracking-wider font-semibold mb-1 text-emerald-500">Recolha</p>
+                                      <p className="text-emerald-600 font-bold">
+                                        {output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}
+                                        {output.collection_date && <span className="block text-[10px] opacity-70">{new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                      </p>
+                                    </div>
+                                    <div>
+                                      <p className="uppercase tracking-wider font-semibold mb-1">Artigos</p>
+                                      <p className="text-slate-600 font-medium">{output.items?.length || 0} Itens</p>
+                                      <button 
+                                        onClick={() => setExpandedOutputs({...expandedOutputs, [output.id]: !isExpanded})}
+                                        className="flex items-center gap-1 text-emerald-600 font-bold hover:underline mt-1"
+                                      >
+                                        {isExpanded ? 'Ocultar' : 'Ver'}
+                                        {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <AnimatePresence>
+                                    {isExpanded && (
+                                      <motion.div 
+                                        initial={{ height: 0, opacity: 0 }}
+                                        animate={{ height: 'auto', opacity: 1 }}
+                                        exit={{ height: 0, opacity: 0 }}
+                                        className="mt-6 pt-6 border-t border-slate-50 overflow-hidden"
+                                      >
+                                        <div className="bg-slate-50 rounded-2xl p-4">
+                                          <p className="text-xs font-bold text-slate-400 uppercase mb-3 tracking-widest">Artigos Pendentes</p>
+                                          <div className="space-y-3">
+                                            {output.items?.map(item => (
+                                              <div key={item.id} className="flex justify-between items-center text-sm">
+                                                <div className="flex-1">
+                                                  <span className="text-slate-700 font-medium block">{item.article_description}</span>
+                                                  <span className="text-[10px] text-slate-400 font-mono">{item.article_code}</span>
+                                                </div>
+                                                <div className="flex items-center gap-4">
+                                                  <div className="text-center">
+                                                    <p className="text-[10px] text-slate-400 uppercase font-bold">Entrega</p>
+                                                    <p className="text-red-500 font-bold">{item.quantity_out}</p>
+                                                  </div>
+                                                  <div className="text-center">
+                                                    <p className="text-[10px] text-slate-400 uppercase font-bold">Recolha</p>
+                                                    <p className="text-emerald-500 font-bold">{item.quantity_in}</p>
+                                                  </div>
+                                                  <div className="text-center bg-white px-3 py-1 rounded-lg border border-slate-100">
+                                                    <p className="text-[10px] text-slate-400 uppercase font-bold">Pendente</p>
+                                                    <p className="text-slate-800 font-extrabold">{item.quantity_out - item.quantity_in}</p>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      </motion.div>
+                                    )}
+                                  </AnimatePresence>
+                                </div>
+                              </div>
+                            );
+                           } else {
+                            const movement = item;
+                            const output = movement.relatedOutput;
+                            const isExpanded = expandedOutputs[output?.id || 0];
+
+                            return (
+                              <div key={`completed-${movement.id}`} className="bg-white rounded-3xl border border-slate-100 shadow-lg hover:shadow-xl transition-all overflow-hidden border-l-4 border-l-emerald-500">
+                                <div className="p-6">
+                                  <div className="flex justify-between items-start">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2 mb-1">
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                          output?.type === 'ALUGUER' ? 'bg-blue-100 text-blue-600' :
+                                          output?.type === 'SERVIÇO' ? 'bg-emerald-100 text-emerald-600' :
+                                          output?.type === 'REPARAÇÃO' ? 'bg-orange-100 text-orange-600' :
+                                          'bg-slate-100 text-slate-600'
+                                        }`}>
+                                          {output?.type || 'N/A'}
+                                        </span>
+                                        <span className="text-xs text-slate-400 font-medium">#{output?.id || 'N/A'}</span>
+                                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-50 text-blue-500 border border-blue-100">
+                                          Efetuada
+                                        </span>
+                                      </div>
+                                      <h3 className="text-lg font-bold text-slate-800">{output?.client_name || 'N/A'}</h3>
+                                      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+                                        <p className="text-sm text-slate-500 flex items-center gap-1">
+                                          <MapPin size={14} className="text-slate-400" />
+                                          {output?.location_name} {output?.space_at_location && `(${output?.space_at_location})`}
+                                        </p>
+                                        {output?.client_contact && (
+                                          <p className="text-sm text-slate-500 flex items-center gap-1">
+                                            <Phone size={14} className="text-slate-400" />
+                                            {output.client_contact}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                      <button 
+                                        onClick={() => {
+                                          setEditingMovementId(movement.id);
+                                          setEditingMovementData({
+                                            quantity: movement.quantity,
+                                            observations: movement.observations || ''
+                                          });
+                                          setShowInputForm(true);
+                                        }}
+                                        className="p-2 text-slate-400 hover:text-emerald-500 transition-colors bg-slate-50 rounded-xl"
+                                        title="Editar Recolha"
+                                      >
+                                        <Edit size={18} />
+                                      </button>
+                                      <button 
+                                        onClick={() => handleDeleteMovement(movement.id)}
+                                        className="p-2 text-slate-400 hover:text-red-500 transition-colors bg-slate-50 rounded-xl"
+                                        title="Anular Recolha"
+                                      >
+                                        <Trash2 size={18} />
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-slate-400">
+                                    <div>
+                                      <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
+                                      <p className="text-slate-600 font-medium">
+                                        {output?.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
+                                        {output?.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                      </p>
+                                    </div>
+                                    <div>
+                                      <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
+                                      <p className="text-slate-600 font-medium">
+                                        {output?.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}
+                                        {output?.assembly_date && <span className="block text-[10px] opacity-70">{new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                      </p>
+                                    </div>
+                                    <div>
+                                      <p className="uppercase tracking-wider font-semibold mb-1 text-emerald-500">Recolha</p>
+                                      <p className="text-emerald-600 font-bold">
+                                        {output?.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}
+                                        {output?.collection_date && <span className="block text-[10px] opacity-70">{new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                      </p>
+                                    </div>
+                                    <div>
+                                      <p className="uppercase tracking-wider font-semibold mb-1">Artigos</p>
+                                      <p className="text-slate-600 font-medium">{output?.items?.length || 0} Itens</p>
+                                      <button 
+                                        onClick={() => setExpandedOutputs({...expandedOutputs, [output?.id || 0]: !isExpanded})}
+                                        className="flex items-center gap-1 text-emerald-600 font-bold hover:underline mt-1"
+                                      >
+                                        {isExpanded ? 'Ocultar' : 'Ver'}
+                                        {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <AnimatePresence>
+                                    {isExpanded && output && (
+                                      <motion.div 
+                                        initial={{ height: 0, opacity: 0 }}
+                                        animate={{ height: 'auto', opacity: 1 }}
+                                        exit={{ height: 0, opacity: 0 }}
+                                        className="mt-6 pt-6 border-t border-slate-50 overflow-hidden"
+                                      >
+                                        <div className="bg-slate-50 rounded-2xl p-4">
+                                          <p className="text-xs font-bold text-slate-400 uppercase mb-3 tracking-widest">Artigos da Entrega</p>
+                                          <div className="space-y-3">
+                                            {output.items?.map(item => (
+                                              <div key={item.id} className="flex justify-between items-center text-sm">
+                                                <div className="flex-1">
+                                                  <span className="text-slate-700 font-medium block">{item.article_description}</span>
+                                                  <span className="text-[10px] text-slate-400 font-mono">{item.article_code}</span>
+                                                </div>
+                                                <div className="flex items-center gap-4">
+                                                  <div className="text-center">
+                                                    <p className="text-[10px] text-slate-400 uppercase font-bold">Entrega</p>
+                                                    <p className="text-red-500 font-bold">{item.quantity_out}</p>
+                                                  </div>
+                                                  <div className="text-center">
+                                                    <p className="text-[10px] text-slate-400 uppercase font-bold">Recolha</p>
+                                                    <p className="text-emerald-500 font-bold">{item.quantity_in}</p>
+                                                  </div>
+                                                  <div className="text-center bg-white px-3 py-1 rounded-lg border border-slate-100">
+                                                    <p className="text-[10px] text-slate-400 uppercase font-bold">Pendente</p>
+                                                    <p className="text-slate-800 font-extrabold">{item.quantity_out - item.quantity_in}</p>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      </motion.div>
+                                    )}
+                                  </AnimatePresence>
+
+                                  <div className="mt-4 flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                                    <div className="flex items-center gap-1">
+                                      <Clock size={12} />
+                                      {new Date(movement.date).toLocaleDateString()} {new Date(movement.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      <UserIcon size={12} />
+                                      {movement.user_name}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          }
+                        });
+                    })()}
                   </div>
                 </div>
               )}
@@ -1740,6 +2215,7 @@ export default function App() {
                     onClick={() => {
                       setShowOutputForm(!showOutputForm);
                       if (!showOutputForm) {
+                        setEditingOutputId(null);
                         setOutputForm({ type: 'ALUGUER', with_assembly: false, items: [] });
                       }
                     }}
@@ -1752,313 +2228,345 @@ export default function App() {
                     {showOutputForm ? <X size={18} /> : <Plus size={18} />}
                     {showOutputForm ? 'Cancelar' : 'Nova Entrega'}
                   </button>
-                  <button 
-                    onClick={() => setView('menu')}
-                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
-                  >
-                    <X size={24} />
-                  </button>
+                  {!showOutputForm && (
+                    <button 
+                      onClick={() => setView('menu')}
+                      className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                    >
+                      <X size={24} />
+                    </button>
+                  )}
                 </div>
               </div>
 
               {showOutputForm ? (
                 <div className="flex flex-col h-full bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden">
                   <form onSubmit={handleSaveOutput} className="flex flex-col h-full overflow-hidden">
-                    <div className="flex-1 overflow-y-auto p-8 custom-scrollbar space-y-8">
-                      {/* Section 1: General Info */}
-                      <div className="space-y-6">
-                        <h3 className="text-lg font-semibold text-slate-700 border-b border-slate-100 pb-2">Informação Geral</h3>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Tipo de Entrega</label>
-                            <select 
-                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                              value={outputForm.type}
-                              onChange={e => setOutputForm({...outputForm, type: e.target.value as OutputType})}
-                            >
-                              <option value="ALUGUER">ALUGUER</option>
-                              <option value="SERVIÇO">SERVIÇO</option>
-                              <option value="EMPRÉSTIMO">EMPRÉSTIMO</option>
-                              <option value="REPARAÇÃO">REPARAÇÃO</option>
-                              <option value="ESTRAGADO">ESTRAGADO</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Nome do Cliente</label>
-                            <input 
-                              type="text" 
-                              required
-                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                              value={outputForm.client_name || ''}
-                              onChange={e => setOutputForm({...outputForm, client_name: e.target.value})}
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Contacto</label>
-                            <input 
-                              type="text" 
-                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                              value={outputForm.client_contact || ''}
-                              onChange={e => setOutputForm({...outputForm, client_contact: e.target.value})}
-                            />
-                          </div>
-                        </div>
+                    {/* Tabs */}
+                    <div className="flex border-b border-slate-100 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setOutputFormTab('info')}
+                        className={`flex-1 py-5 text-center font-bold transition-all border-b-4 ${
+                          outputFormTab === 'info' 
+                            ? 'border-a2r-blue-dark text-a2r-blue-dark bg-blue-50/30 text-xl' 
+                            : 'border-transparent text-slate-400 hover:text-slate-600 text-lg'
+                        }`}
+                      >
+                        Informação Geral
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOutputFormTab('items')}
+                        className={`flex-1 py-5 text-center font-bold transition-all border-b-4 ${
+                          outputFormTab === 'items' 
+                            ? 'border-a2r-blue-dark text-a2r-blue-dark bg-blue-50/30 text-xl' 
+                            : 'border-transparent text-slate-400 hover:text-slate-600 text-lg'
+                        }`}
+                      >
+                        Artigos da Entrega ({outputForm.items?.length || 0})
+                      </button>
+                    </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Data/Hora Entrega</label>
-                            <input 
-                              type="datetime-local" 
-                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                              value={outputForm.delivery_date || ''}
-                              onChange={e => setOutputForm({...outputForm, delivery_date: e.target.value})}
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Data/Hora Montagem</label>
-                            <input 
-                              type="datetime-local" 
-                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                              value={outputForm.assembly_date || ''}
-                              onChange={e => setOutputForm({...outputForm, assembly_date: e.target.value})}
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Data/Hora Recolha</label>
-                            <input 
-                              type="datetime-local" 
-                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                              value={outputForm.collection_date || ''}
-                              onChange={e => setOutputForm({...outputForm, collection_date: e.target.value})}
-                            />
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Local</label>
-                            <input 
-                              type="text" 
-                              list="locations-list"
-                              required
-                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                              value={outputForm.location_name || ''}
-                              onChange={e => setOutputForm({...outputForm, location_name: e.target.value})}
-                            />
-                            <datalist id="locations-list">
-                              {locations.map(loc => (
-                                <option key={loc.id} value={loc.name} />
-                              ))}
-                            </datalist>
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Espaço no Local</label>
-                            <input 
-                              type="text" 
-                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                              value={outputForm.space_at_location || ''}
-                              onChange={e => setOutputForm({...outputForm, space_at_location: e.target.value})}
-                            />
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3">
-                          <input 
-                            type="checkbox" 
-                            id="with_assembly"
-                            className="w-5 h-5 rounded border-slate-300 text-a2r-blue-dark focus:ring-a2r-blue-light"
-                            checked={outputForm.with_assembly || false}
-                            onChange={e => setOutputForm({...outputForm, with_assembly: e.target.checked})}
-                          />
-                          <label htmlFor="with_assembly" className="text-sm font-medium text-slate-700">Com Montagem?</label>
-                        </div>
-
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Observações</label>
-                          <textarea 
-                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light h-24"
-                            value={outputForm.observations || ''}
-                            onChange={e => setOutputForm({...outputForm, observations: e.target.value})}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Section 2: Items */}
-                      <div className="space-y-6">
-                        <h3 className="text-lg font-semibold text-slate-700 border-b border-slate-100 pb-2">Artigos da Entrega</h3>
-                        <div className="flex flex-col md:flex-row gap-4 items-end bg-slate-50 p-6 rounded-2xl border border-slate-100">
-                          <div className="flex-1 w-full relative">
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Artigo (Código ou Descrição)</label>
-                            <div className="flex gap-2">
-                              <div className="relative flex-1">
+                    <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+                      {outputFormTab === 'info' ? (
+                        <div className="space-y-8">
+                          {/* Section 1: General Info */}
+                          <div className="space-y-6">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Tipo de Entrega</label>
+                                <select 
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  value={outputForm.type}
+                                  onChange={e => setOutputForm({...outputForm, type: e.target.value as OutputType})}
+                                >
+                                  <option value="ALUGUER">ALUGUER</option>
+                                  <option value="SERVIÇO">SERVIÇO</option>
+                                  <option value="EMPRÉSTIMO">EMPRÉSTIMO</option>
+                                  <option value="REPARAÇÃO">REPARAÇÃO</option>
+                                  <option value="ESTRAGADO">ESTRAGADO</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Nome do Cliente</label>
+                                <input 
+                                  type="text" 
+                                  required
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  value={outputForm.client_name || ''}
+                                  onChange={e => setOutputForm({...outputForm, client_name: e.target.value})}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Contacto</label>
                                 <input 
                                   type="text" 
                                   className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                                  placeholder="Digite para pesquisar..."
-                                  value={articleSearchQuery}
-                                  onFocus={() => setArticleSearchQuery('')}
-                                  onChange={e => {
-                                    setArticleSearchQuery(e.target.value);
-                                    // If user types something that matches exactly a code, select it
-                                    const exactMatch = articles.find(a => a.code.toLowerCase() === e.target.value.toLowerCase());
-                                    if (exactMatch) {
-                                      setSelectedArticleId(exactMatch.id.toString());
-                                      setArticleSearchQuery(exactMatch.description);
-                                    }
-                                  }}
+                                  value={outputForm.client_contact || ''}
+                                  onChange={e => setOutputForm({...outputForm, client_contact: e.target.value})}
                                 />
-                                {articleSearchQuery && !selectedArticleId && (
-                                  <div className="absolute z-20 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-y-auto">
-                                    {articles
-                                      .filter(a => 
-                                        a.code.toLowerCase().includes(articleSearchQuery.toLowerCase()) || 
-                                        a.description.toLowerCase().includes(articleSearchQuery.toLowerCase())
-                                      )
-                                      .map(art => (
-                                        <button
-                                          key={art.id}
-                                          type="button"
-                                          onClick={() => {
-                                            setSelectedArticleId(art.id.toString());
-                                            setArticleSearchQuery(art.description);
-                                          }}
-                                          disabled={art.available_stock <= 0}
-                                          className="w-full px-4 py-2 text-left hover:bg-slate-50 flex justify-between items-center border-b border-slate-50 last:border-0 disabled:opacity-50"
-                                        >
-                                          <div>
-                                            <p className="font-bold text-slate-800">{art.code}</p>
-                                            <p className="text-xs text-slate-500">{art.description}</p>
-                                          </div>
-                                          <span className={`text-xs font-bold ${art.available_stock > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                                            Stock: {art.available_stock}
-                                          </span>
-                                        </button>
-                                      ))}
-                                  </div>
-                                )}
-                                {selectedArticleId && (
-                                  <button 
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedArticleId('');
-                                      setArticleSearchQuery('');
-                                    }}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500"
-                                  >
-                                    <X size={16} />
-                                  </button>
-                                )}
                               </div>
-                              <button 
-                                type="button"
-                                onClick={() => setShowArticleSearchModal(true)}
-                                className="p-2 bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-a2r-blue-dark hover:border-a2r-blue-dark transition-all"
-                                title="Pesquisa Avançada"
-                              >
-                                <Search size={20} />
-                              </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Data/Hora Entrega</label>
+                                <input 
+                                  type="datetime-local" 
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  value={outputForm.delivery_date || ''}
+                                  onChange={e => setOutputForm({...outputForm, delivery_date: e.target.value})}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Data/Hora Montagem</label>
+                                <input 
+                                  type="datetime-local" 
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  value={outputForm.assembly_date || ''}
+                                  onChange={e => setOutputForm({...outputForm, assembly_date: e.target.value})}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Data/Hora Recolha</label>
+                                <input 
+                                  type="datetime-local" 
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  value={outputForm.collection_date || ''}
+                                  onChange={e => setOutputForm({...outputForm, collection_date: e.target.value})}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Local</label>
+                                <input 
+                                  type="text" 
+                                  list="locations-list"
+                                  required
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  value={outputForm.location_name || ''}
+                                  onChange={e => setOutputForm({...outputForm, location_name: e.target.value})}
+                                />
+                                <datalist id="locations-list">
+                                  {locations.map(loc => (
+                                    <option key={loc.id} value={loc.name} />
+                                  ))}
+                                </datalist>
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Espaço no Local</label>
+                                <input 
+                                  type="text" 
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  value={outputForm.space_at_location || ''}
+                                  onChange={e => setOutputForm({...outputForm, space_at_location: e.target.value})}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                              <input 
+                                type="checkbox" 
+                                id="with_assembly"
+                                className="w-5 h-5 rounded border-slate-300 text-a2r-blue-dark focus:ring-a2r-blue-light"
+                                checked={outputForm.with_assembly || false}
+                                onChange={e => setOutputForm({...outputForm, with_assembly: e.target.checked})}
+                              />
+                              <label htmlFor="with_assembly" className="text-sm font-medium text-slate-700">Com Montagem?</label>
+                            </div>
+
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 mb-1">Observações</label>
+                              <textarea 
+                                className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light h-24"
+                                value={outputForm.observations || ''}
+                                onChange={e => setOutputForm({...outputForm, observations: e.target.value})}
+                              />
                             </div>
                           </div>
-                          <div className="w-full md:w-32">
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Qtd. Entrega</label>
-                            <input 
-                              type="number" 
-                              min="1"
-                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                              value={selectedQuantity}
-                              onChange={e => setSelectedQuantity(parseInt(e.target.value) || 1)}
-                            />
-                          </div>
-                          <button 
-                            type="button"
-                            onClick={addItemToOutput}
-                            className="px-6 py-2 bg-slate-800 text-white rounded-xl font-medium hover:bg-slate-700 transition-colors flex items-center gap-2"
-                          >
-                            <Plus size={18} />
-                            Adicionar
-                          </button>
                         </div>
-
-                        <div className="overflow-x-auto">
-                          <table className="w-full">
-                            <thead>
-                              <tr className="text-left text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
-                                <th className="pb-3 px-2">Artigo</th>
-                                <th className="pb-3 px-2 text-center">Qtd. Entrega</th>
-                                <th className="pb-3 px-2 text-center">Qtd. Recolha</th>
-                                <th className="pb-3 px-2 text-right">Ações</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-50">
-                              {outputForm.items?.length === 0 ? (
-                                <tr>
-                                  <td colSpan={4} className="py-8 text-center text-slate-400 italic">
-                                    Nenhum artigo adicionado.
-                                  </td>
-                                </tr>
-                              ) : (
-                                outputForm.items?.map((item, idx) => (
-                                  <tr key={idx} className="text-sm text-slate-600">
-                                    <td className="py-4 px-2">
-                                      <p className="font-semibold text-slate-800">{item.article_description}</p>
-                                      <p className="text-xs text-slate-400">{item.article_code}</p>
-                                    </td>
-                                    <td className="py-4 px-2 text-center">
-                                      <input 
-                                        type="number"
-                                        min="0"
-                                        className="w-20 px-2 py-1 rounded-lg border border-slate-200 text-center font-bold text-red-500 focus:ring-2 focus:ring-a2r-blue-light outline-none"
-                                        value={item.quantity_out}
-                                        onChange={(e) => {
-                                          const val = parseInt(e.target.value) || 0;
-                                          if (val === 0) {
-                                            if ((item.quantity_in || 0) > 0) {
-                                              showToast('Não pode eliminar um artigo que já tem recolhas.', 'error');
-                                              return;
-                                            }
-                                            removeItemFromOutput(item.article_id);
-                                          } else {
-                                            if (val < (item.quantity_in || 0)) {
-                                              showToast(`A quantidade de entrega não pode ser inferior à quantidade já recolhida (${item.quantity_in}).`, 'error');
-                                              return;
-                                            }
-                                            const newItems = [...(outputForm.items || [])];
-                                            newItems[idx].quantity_out = val;
-                                            setOutputForm({ ...outputForm, items: newItems });
-                                          }
-                                        }}
-                                      />
-                                    </td>
-                                    <td className="py-4 px-2 text-center text-slate-400">
-                                      {item.quantity_in || 0}
-                                    </td>
-                                    <td className="py-4 px-2 text-right">
+                      ) : (
+                        <div className="space-y-8">
+                          {/* Section 2: Items */}
+                          <div className="space-y-6">
+                            <div className="flex flex-col md:flex-row gap-4 items-end bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                              <div className="flex-1 w-full relative">
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Artigo (Código ou Descrição)</label>
+                                <div className="flex gap-2">
+                                  <div className="relative flex-1">
+                                    <input 
+                                      ref={articleCodeInputRef}
+                                      type="text" 
+                                      className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                      placeholder="Digite para pesquisar..."
+                                      value={articleSearchQuery}
+                                      onFocus={() => setArticleSearchQuery('')}
+                                      onChange={e => {
+                                        setArticleSearchQuery(e.target.value);
+                                        // If user types something that matches exactly a code, select it
+                                        const exactMatch = articles.find(a => a.code.toLowerCase() === e.target.value.toLowerCase());
+                                        if (exactMatch) {
+                                          setSelectedArticleId(exactMatch.id.toString());
+                                          setArticleSearchQuery(exactMatch.description);
+                                        }
+                                      }}
+                                    />
+                                    {articleSearchQuery && !selectedArticleId && (
+                                      <div className="absolute z-20 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-y-auto">
+                                        {articles
+                                          .filter(a => 
+                                            a.code.toLowerCase().includes(articleSearchQuery.toLowerCase()) || 
+                                            a.description.toLowerCase().includes(articleSearchQuery.toLowerCase())
+                                          )
+                                          .map(art => (
+                                            <button
+                                              key={art.id}
+                                              type="button"
+                                              onClick={() => {
+                                                setSelectedArticleId(art.id.toString());
+                                                setArticleSearchQuery(art.description);
+                                              }}
+                                              disabled={art.available_stock <= 0}
+                                              className="w-full px-4 py-2 text-left hover:bg-slate-50 flex justify-between items-center border-b border-slate-50 last:border-0 disabled:opacity-50"
+                                            >
+                                              <div>
+                                                <p className="font-bold text-slate-800">{art.code}</p>
+                                                <p className="text-xs text-slate-500">{art.description}</p>
+                                              </div>
+                                              <span className={`text-xs font-bold ${art.available_stock > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                                                Stock: {art.available_stock}
+                                              </span>
+                                            </button>
+                                          ))}
+                                      </div>
+                                    )}
+                                    {selectedArticleId && (
                                       <button 
                                         type="button"
                                         onClick={() => {
-                                          if ((item.quantity_in || 0) > 0) {
-                                            showToast('Não pode eliminar um artigo que já tem recolhas.', 'error');
-                                            return;
-                                          }
-                                          setConfirmModal({
-                                            isOpen: true,
-                                            message: 'Tem a certeza que deseja eliminar este artigo da entrega?',
-                                            onConfirm: () => removeItemFromOutput(item.article_id)
-                                          });
+                                          setSelectedArticleId('');
+                                          setArticleSearchQuery('');
                                         }}
-                                        className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-red-500"
                                       >
-                                        <Trash2 size={18} />
+                                        <X size={16} />
                                       </button>
-                                    </td>
+                                    )}
+                                  </div>
+                                  <button 
+                                    type="button"
+                                    onClick={() => setShowArticleSearchModal(true)}
+                                    className="p-2 bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-a2r-blue-dark hover:border-a2r-blue-dark transition-all"
+                                    title="Pesquisa Avançada"
+                                  >
+                                    <Search size={20} />
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="w-full md:w-32">
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Qtd. Entrega</label>
+                                <input 
+                                  type="number" 
+                                  min="1"
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  value={selectedQuantity}
+                                  onChange={e => setSelectedQuantity(parseInt(e.target.value) || 1)}
+                                />
+                              </div>
+                              <button 
+                                type="button"
+                                onClick={addItemToOutput}
+                                className="px-6 py-2 bg-slate-800 text-white rounded-xl font-medium hover:bg-slate-700 transition-colors flex items-center gap-2"
+                              >
+                                <Plus size={18} />
+                                Adicionar
+                              </button>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                              <table className="w-full">
+                                <thead>
+                                  <tr className="text-left text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
+                                    <th className="pb-3 px-2">Artigo</th>
+                                    <th className="pb-3 px-2 text-center">Qtd. Entrega</th>
+                                    <th className="pb-3 px-2 text-center">Qtd. Recolha</th>
+                                    <th className="pb-3 px-2 text-right">Ações</th>
                                   </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                  {outputForm.items?.length === 0 ? (
+                                    <tr>
+                                      <td colSpan={4} className="py-8 text-center text-slate-400 italic">
+                                        Nenhum artigo adicionado.
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    outputForm.items?.map((item, idx) => (
+                                      <tr key={idx} className="text-sm text-slate-600">
+                                        <td className="py-4 px-2">
+                                          <p className="font-semibold text-slate-800">{item.article_description}</p>
+                                          <p className="text-xs text-slate-400">{item.article_code}</p>
+                                        </td>
+                                        <td className="py-4 px-2 text-center">
+                                          <input 
+                                            type="number"
+                                            min="0"
+                                            className="w-20 px-2 py-1 rounded-lg border border-slate-200 text-center font-bold text-red-500 focus:ring-2 focus:ring-a2r-blue-light outline-none"
+                                            value={item.quantity_out}
+                                            onChange={(e) => {
+                                              const val = parseInt(e.target.value) || 0;
+                                              if (val === 0) {
+                                                if ((item.quantity_in || 0) > 0) {
+                                                  showToast('Não pode eliminar um artigo que já tem recolhas.', 'error');
+                                                  return;
+                                                }
+                                                removeItemFromOutput(item.article_id);
+                                              } else {
+                                                if (val < (item.quantity_in || 0)) {
+                                                  showToast(`A quantidade de entrega não pode ser inferior à quantidade já recolhida (${item.quantity_in}).`, 'error');
+                                                  return;
+                                                }
+                                                const newItems = [...(outputForm.items || [])];
+                                                newItems[idx].quantity_out = val;
+                                                setOutputForm({ ...outputForm, items: newItems });
+                                              }
+                                            }}
+                                          />
+                                        </td>
+                                        <td className="py-4 px-2 text-center text-slate-400">
+                                          {item.quantity_in || 0}
+                                        </td>
+                                        <td className="py-4 px-2 text-right">
+                                          <button 
+                                            type="button"
+                                            onClick={() => {
+                                              if ((item.quantity_in || 0) > 0) {
+                                                showToast('Não pode eliminar um artigo que já tem recolhas.', 'error');
+                                                return;
+                                              }
+                                              setConfirmModal({
+                                                isOpen: true,
+                                                message: 'Tem a certeza que deseja eliminar este artigo da entrega?',
+                                                onConfirm: () => removeItemFromOutput(item.article_id)
+                                              });
+                                            }}
+                                            className="p-2 text-red-400 hover:bg-red-50 rounded-lg transition-colors"
+                                          >
+                                            <Trash2 size={18} />
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
 
                     <div className="p-6 border-t border-slate-50 bg-slate-50/50 flex justify-end gap-4 shrink-0">
@@ -2093,13 +2601,16 @@ export default function App() {
                         onChange={e => setOutputSearch(e.target.value)}
                       />
                     </div>
+                    <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
+                      <span className="text-sm font-medium text-slate-500 whitespace-nowrap">Desde:</span>
+                      <input 
+                        type="date" 
+                        className="px-2 py-1 rounded-lg border border-slate-200 bg-white focus:ring-2 focus:ring-a2r-blue-light outline-none text-sm"
+                        value={outputStartDate}
+                        onChange={e => setOutputStartDate(e.target.value)}
+                      />
+                    </div>
                     <div className="flex bg-white p-1 rounded-2xl border border-slate-100 shadow-sm">
-                      <button 
-                        onClick={() => setOutputStatusFilter('ALL')}
-                        className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'ALL' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
-                      >
-                        Todas
-                      </button>
                       <button 
                         onClick={() => setOutputStatusFilter('ACTIVE')}
                         className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'ACTIVE' ? 'bg-emerald-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
@@ -2112,6 +2623,12 @@ export default function App() {
                       >
                         Saldadas
                       </button>
+                      <button 
+                        onClick={() => setOutputStatusFilter('ALL')}
+                        className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'ALL' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+                      >
+                        Todas
+                      </button>
                     </div>
                   </div>
 
@@ -2121,12 +2638,13 @@ export default function App() {
                         const matchesSearch = o.client_name.toLowerCase().includes(outputSearch.toLowerCase()) || 
                                             o.location_name?.toLowerCase().includes(outputSearch.toLowerCase());
                         
+                        const matchesDate = !outputStartDate || (o.delivery_date && o.delivery_date >= outputStartDate);
                         const isSettled = o.items?.every(item => item.quantity_out === item.quantity_in);
                         const isActive = !isSettled;
 
-                        if (outputStatusFilter === 'ACTIVE') return matchesSearch && isActive;
-                        if (outputStatusFilter === 'SETTLED') return matchesSearch && isSettled;
-                        return matchesSearch;
+                        if (outputStatusFilter === 'ACTIVE') return matchesSearch && matchesDate && isActive;
+                        if (outputStatusFilter === 'SETTLED') return matchesSearch && matchesDate && isSettled;
+                        return matchesSearch && matchesDate;
                       })
                       .sort((a, b) => {
                         const dateA = a.delivery_date ? new Date(a.delivery_date).getTime() : 0;
@@ -2338,7 +2856,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-slate-700 mb-1">Altura (cm)</label>
                       <input 
                         type="number" 
-                        step="0.1"
+                        step="0.01"
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                         value={newArticle.height || ''}
                         onChange={e => setNewArticle({...newArticle, height: parseFloat(e.target.value)})}
@@ -2348,7 +2866,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-slate-700 mb-1">Largura (cm)</label>
                       <input 
                         type="number" 
-                        step="0.1"
+                        step="0.01"
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                         value={newArticle.width || ''}
                         onChange={e => setNewArticle({...newArticle, width: parseFloat(e.target.value)})}
@@ -2358,7 +2876,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-slate-700 mb-1">Compr. (cm)</label>
                       <input 
                         type="number" 
-                        step="0.1"
+                        step="0.01"
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                         value={newArticle.length || ''}
                         onChange={e => setNewArticle({...newArticle, length: parseFloat(e.target.value)})}
@@ -2392,23 +2910,49 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      {/* Bottom Navigation */}
-      <nav className="bg-white border-t border-slate-200 px-6 py-3 z-10">
-        <div className="max-w-lg mx-auto flex items-center justify-around">
-          <NavButton 
-            active={view === 'menu'} 
-            onClick={() => setView('menu')} 
-            icon={<LayoutGrid size={20} />} 
-            label="Menu" 
-          />
-          <NavButton 
-            active={view === 'articles' || view === 'add-article' || view === 'edit-article'} 
-            onClick={() => setView('articles')} 
-            icon={<Package size={20} />} 
-            label="Artigos" 
-          />
-        </div>
-      </nav>
+      {/* Bottom Navigation - Hidden on smartphones */}
+      {user && (
+        <nav className="hidden sm:block bg-white border-t border-slate-200 px-1 py-2 z-10 shrink-0">
+          <div className="max-w-lg mx-auto flex items-center justify-between">
+            <NavButton 
+              active={view === 'menu'} 
+              onClick={() => setView('menu')} 
+              icon={<LayoutGrid size={20} />} 
+              label="Menu" 
+            />
+            <NavButton 
+              active={view === 'articles' || view === 'add-article' || view === 'edit-article'} 
+              onClick={() => setView('articles')} 
+              icon={<Package size={20} />} 
+              label="Artigos" 
+            />
+            <NavButton 
+              active={view === 'outputs'} 
+              onClick={() => setView('outputs')} 
+              icon={<ArrowUpRight size={20} />} 
+              label="Entregas" 
+            />
+            <NavButton 
+              active={view === 'inputs'} 
+              onClick={() => setView('inputs')} 
+              icon={<ArrowDownLeft size={20} />} 
+              label="Recolhas" 
+            />
+            <NavButton 
+              active={view === 'calendar'} 
+              onClick={() => setView('calendar')} 
+              icon={<Calendar size={20} />} 
+              label="Calendário" 
+            />
+            <NavButton 
+              active={view === 'history'} 
+              onClick={() => setView('history')} 
+              icon={<History size={20} />} 
+              label="Histórico" 
+            />
+          </div>
+        </nav>
+      )}
 
       {/* Custom Confirmation Modal */}
       <AnimatePresence>
@@ -2489,7 +3033,7 @@ export default function App() {
                   <input 
                     type="text"
                     autoFocus
-                    placeholder="Pesquisar por código, descrição, categoria..."
+                    placeholder="Pesquisar por código, descrição..."
                     className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-a2r-blue-light outline-none text-lg"
                     value={articleSearchQuery}
                     onFocus={() => setArticleSearchQuery('')}
@@ -2497,12 +3041,11 @@ export default function App() {
                   />
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-3">
                   {articles
                     .filter(a => 
                       a.code.toLowerCase().includes(articleSearchQuery.toLowerCase()) || 
-                      a.description.toLowerCase().includes(articleSearchQuery.toLowerCase()) ||
-                      a.category?.toLowerCase().includes(articleSearchQuery.toLowerCase())
+                      a.description.toLowerCase().includes(articleSearchQuery.toLowerCase())
                     )
                     .map(art => (
                       <button
@@ -2513,10 +3056,14 @@ export default function App() {
                           setShowArticleSearchModal(false);
                         }}
                         disabled={art.available_stock <= 0}
-                        className="flex items-start gap-4 p-4 rounded-2xl border border-slate-100 hover:border-a2r-blue-light hover:bg-blue-50/30 transition-all text-left group disabled:opacity-50 disabled:hover:border-slate-100 disabled:hover:bg-transparent"
+                        className="w-full flex items-center gap-4 p-4 rounded-2xl border border-slate-100 hover:border-a2r-blue-light hover:bg-blue-50/30 transition-all text-left group disabled:opacity-50 disabled:hover:border-slate-100 disabled:hover:bg-transparent"
                       >
-                        <div className="w-16 h-16 bg-slate-100 rounded-xl flex-shrink-0 flex items-center justify-center text-slate-400 group-hover:bg-white transition-colors">
-                          <Package size={32} />
+                        <div className="w-20 h-20 bg-slate-100 rounded-xl flex-shrink-0 flex items-center justify-center text-slate-400 group-hover:bg-white transition-colors overflow-hidden">
+                          {art.photo ? (
+                            <img src={art.photo} alt={art.description} className="w-full h-full object-cover" />
+                          ) : (
+                            <Package size={32} />
+                          )}
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex justify-between items-start mb-1">
@@ -2527,16 +3074,11 @@ export default function App() {
                               Stock: {art.available_stock}
                             </span>
                           </div>
-                          <p className="text-sm text-slate-600 line-clamp-2 mb-1">{art.description}</p>
-                          <div className="flex items-center gap-2">
+                          <p className="text-sm text-slate-600 line-clamp-1 mb-1">{art.description}</p>
+                          <div className="flex items-center gap-3">
                             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 bg-slate-50 px-2 py-0.5 rounded">
-                              {art.category || 'Sem Categoria'}
+                              {art.height || 0}x{art.width || 0}x{art.length || 0} cm
                             </span>
-                            {art.available_stock > 0 && (
-                              <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-0.5">
-                                <CheckCircle2 size={10} /> Validado
-                              </span>
-                            )}
                           </div>
                         </div>
                       </button>
@@ -2619,7 +3161,7 @@ export default function App() {
                       <Download size={20} />
                     </button>
                     <button 
-                      onClick={() => setPdfPreview(null)}
+                      onClick={() => closePdfPreview()}
                       className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
                     >
                       <X size={24} />
@@ -2628,16 +3170,17 @@ export default function App() {
                 </div>
                 
                 <div className="flex-1 bg-slate-100 p-4 overflow-hidden relative">
-                  <embed 
+                  <iframe 
+                    key={pdfPreview.url}
                     src={pdfPreview.url} 
-                    type="application/pdf"
                     className="w-full h-full rounded-xl border border-slate-200 shadow-inner bg-white"
+                    title="PDF Preview"
                   />
                 </div>
                 
                 <div className="p-6 border-t border-slate-100 flex justify-end gap-4 shrink-0">
                   <button 
-                    onClick={() => setPdfPreview(null)}
+                    onClick={() => closePdfPreview()}
                     className="px-6 py-2 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50"
                   >
                     Fechar
@@ -2702,13 +3245,13 @@ function NavButton({ active, onClick, icon, label }: { active: boolean, onClick:
     <button 
       onClick={onClick}
       className={`flex flex-col items-center gap-1 transition-all ${
-        active ? 'text-a2r-blue-dark scale-110' : 'text-slate-400 hover:text-slate-600'
+        active ? 'text-emerald-600 scale-110' : 'text-slate-400 hover:text-slate-600'
       }`}
     >
-      <div className={`p-2 rounded-xl transition-colors ${active ? 'bg-blue-50' : ''}`}>
+      <div className={`p-2 rounded-xl transition-colors ${active ? 'bg-emerald-50' : ''}`}>
         {icon}
       </div>
-      <span className="text-[10px] font-bold uppercase tracking-tighter">{label}</span>
+      <span className={`text-[10px] font-bold uppercase tracking-tighter ${active ? 'text-emerald-700' : ''}`}>{label}</span>
     </button>
   );
 }

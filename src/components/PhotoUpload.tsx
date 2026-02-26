@@ -10,6 +10,7 @@ interface PhotoUploadProps {
 export const PhotoUpload: React.FC<PhotoUploadProps> = ({ onPhotoCapture, currentPhoto, label = "Foto" }) => {
   const [preview, setPreview] = useState<string | null>(currentPhoto || null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -50,14 +51,24 @@ export const PhotoUpload: React.FC<PhotoUploadProps> = ({ onPhotoCapture, curren
           )}
         </div>
         <div className="flex flex-col gap-2">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
-          >
-            <Camera size={16} />
-            Capturar / Galeria
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+            >
+              <Camera size={16} />
+              Câmara
+            </button>
+            <button
+              type="button"
+              onClick={() => galleryInputRef.current?.click()}
+              className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+            >
+              <ImageIcon size={16} />
+              Galeria
+            </button>
+          </div>
           <input
             type="file"
             ref={fileInputRef}
@@ -66,7 +77,14 @@ export const PhotoUpload: React.FC<PhotoUploadProps> = ({ onPhotoCapture, curren
             capture="environment"
             className="hidden"
           />
-          <p className="text-xs text-slate-500">Câmara ou Galeria</p>
+          <input
+            type="file"
+            ref={galleryInputRef}
+            onChange={handleFileChange}
+            accept="image/*"
+            className="hidden"
+          />
+          <p className="text-xs text-slate-500">Tirar foto ou carregar da galeria</p>
         </div>
       </div>
     </div>

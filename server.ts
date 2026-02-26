@@ -641,31 +641,6 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/movements/:id", (req, res) => {
-    const { id } = req.params;
-    try {
-      const transaction = db.transaction(() => {
-        const movement = db.prepare("SELECT * FROM movements WHERE id = ?").get(id) as any;
-        if (!movement) throw new Error("Movimento não encontrado");
-
-        const article = db.prepare("SELECT available_stock FROM articles WHERE id = ?").get(movement.article_id) as any;
-        let newStock = article.available_stock;
-        if (movement.type === 'OUT') {
-          newStock += movement.quantity;
-        } else {
-          newStock -= movement.quantity;
-        }
-        
-        db.prepare("UPDATE articles SET available_stock = ? WHERE id = ?").run(newStock, movement.article_id);
-        db.prepare("DELETE FROM movements WHERE id = ?").run(id);
-      });
-      transaction();
-      res.json({ success: true });
-    } catch (e: any) {
-      res.status(400).json({ error: e.message });
-    }
-  });
-
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
