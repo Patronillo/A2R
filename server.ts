@@ -3,9 +3,17 @@ import { createServer as createViteServer } from "vite";
 import { sql } from "@vercel/postgres";
 import path from "path";
 import { fileURLToPath } from "url";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Check for required environment variables
+if (!process.env.POSTGRES_URL) {
+  console.warn("[DB] Warning: POSTGRES_URL is not set. Database operations will fail.");
+}
 
 // Helper to ensure schema exists and is up to date
 async function ensureSchema() {
@@ -117,10 +125,11 @@ async function ensureSchema() {
 }
 
 async function startServer() {
-  await ensureSchema();
-
   const app = express();
   const PORT = 3000;
+
+  // Initialize schema in the background or before starting
+  ensureSchema().catch(err => console.error("[DB] Initial schema check failed:", err));
 
   app.use(express.json({ limit: '50mb' }));
 
@@ -724,15 +733,24 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, "dist")));
+    // Serve static files from dist
+    const distPath = path.join(__dirname, "dist");
+    app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path.resolve(__dirname, "dist", "index.html"));
+      res.sendFile(path.resolve(distPath, "index.html"));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  // Only listen if not running as a serverless function
+  if (process.env.NODE_ENV !== "production" || (!process.env.VERCEL && !process.env.NOW_REGION)) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
+
+  return app;
 }
 
-startServer();
+const app = await startServer();
+
+export default app;
