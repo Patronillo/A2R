@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { User, Article, Movement, Output, OutputItem, OutputType, Location } from './types';
+import { User, Article, Movement, Output, OutputItem, OutputType, Location, Employee } from './types';
 import { 
   Package, 
   LogOut, 
   Plus, 
   Search,
+  ChevronLeft,
   ChevronRight,
   ChevronDown,
   ChevronUp,
@@ -23,14 +24,180 @@ import {
   Printer,
   Download,
   Calendar,
-  User as UserIcon
+  User as UserIcon,
+  FileText,
+  BarChart3
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PhotoUpload } from './components/PhotoUpload';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import html2canvas from 'html2canvas';
 
-type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar';
+import { 
+  AreaChart, 
+  Area, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer,
+  ReferenceLine
+} from 'recharts';
+import { format, addDays, startOfDay, isAfter, isBefore, parseISO, startOfToday } from 'date-fns';
+import { pt } from 'date-fns/locale';
+
+const isHoliday = (date: Date) => {
+  const day = date.getDate();
+  const month = date.getMonth() + 1;
+  const year = date.getFullYear();
+
+  const fixedHolidays = [
+    { d: 1, m: 1 }, { d: 25, m: 4 }, { d: 1, m: 5 }, { d: 10, m: 6 },
+    { d: 15, m: 8 }, { d: 5, m: 10 }, { d: 1, m: 11 }, { d: 1, m: 12 },
+    { d: 8, m: 12 }, { d: 25, m: 12 }
+  ];
+
+  if (fixedHolidays.some(h => h.d === day && h.m === month)) return true;
+
+  if (year === 2026) {
+    if (day === 3 && month === 4) return true; // Sexta-feira Santa
+    if (day === 5 && month === 4) return true; // Páscoa
+    if (day === 4 && month === 6) return true; // Corpo de Deus
+  }
+  return false;
+};
+
+type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar' | 'position';
+
+const formatFullDate = (dateStr: string | null | undefined) => {
+  if (!dateStr) return 'N/A';
+  const d = new Date(dateStr);
+  const days = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+  const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+  return `${d.getDate()}, ${months[d.getMonth()]}, ${d.getFullYear()} ${days[d.getDay()]} ${d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+};
+
+const StockTimeline = ({ article, outputs, timelineRef }: { article: Article, outputs: Output[], timelineRef?: React.RefObject<HTMLDivElement | null> }) => {
+  const activeMovements = React.useMemo(() => {
+    return outputs
+      .filter(o => o.items?.some(i => i.article_id === article.id))
+      .map(o => {
+        const item = o.items?.find(i => i.article_id === article.id);
+        return {
+          ...o,
+          quantity: item?.quantity_out || 0,
+          returned: item?.quantity_in || 0
+        };
+      })
+      .filter(o => (o.quantity - o.returned) > 0)
+      .sort((a, b) => new Date(a.delivery_date || 0).getTime() - new Date(b.delivery_date || 0).getTime());
+  }, [article, outputs]);
+
+  const today = startOfToday();
+  
+  // Calculate range: from earliest delivery to latest collection
+  const minDate = activeMovements.length > 0 
+    ? new Date(Math.min(...activeMovements.map(o => new Date(o.delivery_date || today).getTime())))
+    : today;
+  const maxDate = activeMovements.length > 0
+    ? new Date(Math.max(...activeMovements.map(o => new Date(o.collection_date || today).getTime())))
+    : addDays(today, 7);
+
+  return (
+    <div ref={timelineRef as any} style={{ backgroundColor: '#ffffff', border: '1px solid #f1f5f9', borderRadius: '24px', padding: '24px', marginBottom: '24px', position: 'relative', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+        <h4 style={{ fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#94a3b8', fontFamily: 'Outfit, sans-serif', margin: 0 }}>Posição de Stock - Linha de Tempo</h4>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+           <div style={{ width: '12px', height: '12px', borderRadius: '9999px', backgroundColor: '#234e7a' }}></div>
+           <span style={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase', color: '#94a3b8' }}>Material no Local</span>
+        </div>
+      </div>
+      
+      {activeMovements.length === 0 ? (
+        <div style={{ padding: '48px 0', textAlign: 'center' }}>
+          <Clock className="mx-auto mb-2" size={32} style={{ color: '#e2e8f0' }} />
+          <p style={{ fontSize: '14px', fontStyle: 'italic', color: '#94a3b8', margin: 0 }}>Sem movimentos ativos para este artigo.</p>
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto', paddingBottom: '16px' }}>
+          <div style={{ minWidth: '900px', padding: '0 8px' }}>
+            {/* Header Dates */}
+            <div style={{ position: 'relative', height: '40px', borderBottom: '1px solid #f1f5f9', marginBottom: '24px' }}>
+              <div style={{ position: 'absolute', left: 0, width: '200px', height: '100%', display: 'flex', alignItems: 'center' }}>
+                <span style={{ fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', color: '#94a3b8' }}>Serviço / Cliente</span>
+              </div>
+              <div style={{ position: 'absolute', left: '200px', right: 0, height: '100%' }}>
+                {[0, 25, 50, 75, 100].map(percent => {
+                  const date = new Date(minDate.getTime() + (maxDate.getTime() - minDate.getTime()) * (percent / 100));
+                  return (
+                    <div 
+                      key={percent} 
+                      style={{ position: 'absolute', left: `${percent}%`, display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateX(-50%)' }}
+                    >
+                      <div style={{ width: '1px', height: '8px', marginBottom: '4px', backgroundColor: '#cbd5e1' }}></div>
+                      <span style={{ fontSize: '9px', fontWeight: '900', textTransform: 'uppercase', letterSpacing: '0.1em', color: '#94a3b8' }}>
+                        {format(date, 'dd/MM')}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ position: 'relative' }}>
+              {/* Vertical Grid Lines */}
+              <div style={{ position: 'absolute', left: '200px', right: 0, top: 0, bottom: 0, pointerEvents: 'none' }}>
+                {[0, 25, 50, 75, 100].map(percent => (
+                  <div 
+                    key={percent} 
+                    style={{ position: 'absolute', top: 0, bottom: 0, width: '1px', left: `${percent}%`, backgroundColor: '#e2e8f0' }}
+                  />
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
+                {activeMovements.map((o, idx) => {
+                  const start = new Date(o.delivery_date || today);
+                  const end = new Date(o.collection_date || today);
+                  
+                  const totalRange = maxDate.getTime() - minDate.getTime();
+                  const left = ((start.getTime() - minDate.getTime()) / totalRange) * 100;
+                  const width = Math.max(((end.getTime() - start.getTime()) / totalRange) * 100, 2);
+
+                  return (
+                    <div key={o.id} style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '16px', alignItems: 'center', position: 'relative', zIndex: 10 }}>
+                      {/* Left Side: Type / Client */}
+                      <div style={{ textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', paddingRight: '16px' }}>
+                        <span style={{ fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', display: 'block', lineHeight: 1, marginBottom: '4px', color: '#6366f1' }}>{o.type}</span>
+                        <span style={{ fontSize: '11px', fontWeight: '900', color: '#1e293b', overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>{o.location_name}</span>
+                      </div>
+                      
+                      {/* Right Side: Timeline Bar */}
+                      <div style={{ position: 'relative', height: '32px', display: 'flex', alignItems: 'center' }}>
+                        <div style={{ position: 'absolute', inset: 0, borderRadius: '9999px', backgroundColor: '#f8fafc', border: '1px solid #f1f5f9' }}></div>
+                        <motion.div
+                          initial={{ width: 0, opacity: 0 }}
+                          animate={{ width: `${width}%`, opacity: 1 }}
+                          transition={{ duration: 0.8, delay: idx * 0.1 }}
+                          style={{ position: 'absolute', left: `${left}%`, height: '20px', borderRadius: '9999px', backgroundColor: '#234e7a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          <span style={{ fontSize: '10px', fontWeight: '900', color: '#ffffff', padding: '0 8px', whiteSpace: 'nowrap' }}>
+                            {o.quantity - o.returned} un.
+                          </span>
+                        </motion.div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export default function App() {
   const [view, setView] = useState<View>('login');
@@ -39,12 +206,12 @@ export default function App() {
   const [error, setError] = useState('');
   const [articles, setArticles] = useState<Article[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [outputs, setOutputs] = useState<Output[]>([]); // Entregas
   const [movements, setMovements] = useState<Movement[]>([]); // Recolhas
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   const [confirmModal, setConfirmModal] = useState<{message: string, onConfirm: () => void} | null>(null);
-  const [pdfPreview, setPdfPreview] = useState<{url: string, output: Output} | null>(null);
 
   // Forgot PIN State
   const [forgotEmail, setForgotEmail] = useState('');
@@ -68,6 +235,8 @@ export default function App() {
   const [outputForm, setOutputForm] = useState<Partial<Output>>({
     type: 'ALUGUER',
     with_assembly: false,
+    delivery_employee: '',
+    collection_employee: '',
     items: []
   });
   const [editingOutputId, setEditingOutputId] = useState<number | null>(null);
@@ -77,6 +246,7 @@ export default function App() {
   // Return Form State
   const [selectedOutputId, setSelectedOutputId] = useState<string>('');
   const [returnItems, setReturnItems] = useState<Record<number, number>>({});
+  const [returnEmployee, setReturnEmployee] = useState('');
   const [editingMovementId, setEditingMovementId] = useState<number | null>(null);
   const [editingMovementData, setEditingMovementData] = useState<{quantity: number, observations: string}>({quantity: 0, observations: ''});
 
@@ -94,7 +264,17 @@ export default function App() {
   const [historyArticleFilter, setHistoryArticleFilter] = useState('');
   const [historyStartDate, setHistoryStartDate] = useState('2026-01-01');
   const [calendarDate, setCalendarDate] = useState(new Date().toISOString().split('T')[0]);
+  const [calendarViewDate, setCalendarViewDate] = useState(new Date());
+  const [showCalendarDetail, setShowCalendarDetail] = useState(false);
   const [outputFormTab, setOutputFormTab] = useState<'info' | 'items'>('info');
+  const [viewSource, setViewSource] = useState<'outputs' | 'inputs' | 'calendar' | null>(null);
+  const [expandedRecolhas, setExpandedRecolhas] = useState<Record<number, boolean>>({});
+  const [expandedEntregas, setExpandedEntregas] = useState<Record<number, boolean>>({});
+  const [expandedAtivas, setExpandedAtivas] = useState<Record<number, boolean>>({});
+  const [calendarFilter, setCalendarFilter] = useState<'ALL' | 'ENTREGAS' | 'ATIVAS' | 'EFETUADAS'>('ALL');
+  const [positionArticleId, setPositionArticleId] = useState<string>('');
+  const [positionSearchQuery, setPositionSearchQuery] = useState('');
+  const timelineRef = React.useRef<HTMLDivElement>(null);
 
   const articleCodeInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -127,6 +307,7 @@ export default function App() {
     if (user) {
       fetchArticles();
       fetchLocations();
+      fetchEmployees();
       fetchOutputs();
       fetchMovements();
     }
@@ -147,6 +328,12 @@ export default function App() {
     const res = await fetch('/api/locations');
     const data = await res.json();
     setLocations(data);
+  };
+
+  const fetchEmployees = async () => {
+    const res = await fetch('/api/employees');
+    const data = await res.json();
+    setEmployees(data);
   };
 
   const fetchOutputs = async () => {
@@ -356,11 +543,17 @@ export default function App() {
         await fetchArticles();
         await fetchLocations();
         await fetchOutputs();
+        if (viewSource === 'calendar') {
+          setView('calendar');
+        }
         setShowOutputForm(false);
         setEditingOutputId(null);
+        setViewSource(null);
         setOutputForm({
           type: 'ALUGUER',
           with_assembly: false,
+          delivery_employee: '',
+          collection_employee: '',
           items: []
         });
       } else {
@@ -371,6 +564,26 @@ export default function App() {
       showToast('Erro ao conectar ao servidor', 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleUpdateOutputEmployee = async (id: number, data: { delivery_employee?: string, collection_employee?: string }) => {
+    try {
+      const res = await fetch(`/api/outputs/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        showToast('Funcionário atualizado com sucesso!');
+        await fetchOutputs();
+        await fetchEmployees();
+      } else {
+        const data = await res.json();
+        showToast(`Erro: ${data.error}`, 'error');
+      }
+    } catch (err) {
+      showToast('Erro ao conectar ao servidor', 'error');
     }
   };
 
@@ -386,12 +599,28 @@ export default function App() {
           body: JSON.stringify(editingMovementData)
         });
         if (res.ok) {
+          // Update the output's collection_employee as well
+          const movement = movements.find(m => m.id === editingMovementId);
+          const outputIdMatch = movement?.observations?.match(/#(\d+)/);
+          const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
+          if (outputId) {
+            await fetch(`/api/outputs/${outputId}/status`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ collection_employee: returnEmployee })
+            });
+          }
+          
           showToast('Recolha atualizada com sucesso!');
           await fetchArticles();
           await fetchOutputs();
           await fetchMovements();
+          if (viewSource === 'calendar') {
+            setView('calendar');
+          }
           setShowInputForm(false);
           setEditingMovementId(null);
+          setViewSource(null);
         } else {
           const data = await res.json();
           showToast(`Erro: ${data.error}`, 'error');
@@ -425,7 +654,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           items: itemsToReturn,
-          user_id: user?.id
+          user_id: user?.id,
+          collection_employee: returnEmployee
         })
       });
 
@@ -434,9 +664,15 @@ export default function App() {
         await fetchArticles();
         await fetchOutputs();
         await fetchMovements();
+        await fetchEmployees();
+        if (viewSource === 'calendar') {
+          setView('calendar');
+        }
         setShowInputForm(false);
         setSelectedOutputId('');
         setReturnItems({});
+        setReturnEmployee('');
+        setViewSource(null);
       } else {
         const data = await res.json();
         showToast(`Erro: ${data.error}`, 'error');
@@ -537,21 +773,23 @@ export default function App() {
     // 4. Detail Table
     const tableData = output.items?.map(item => [
       item.article_description || '',
-      item.quantity_out.toString(),
-      item.quantity_in > 0 ? item.quantity_in.toString() : ''
+      item.quantity_out === 0 ? '' : item.quantity_out.toString(),
+      item.quantity_in === 0 ? '' : item.quantity_in.toString(),
+      (item.quantity_out - item.quantity_in) === 0 ? '' : (item.quantity_out - item.quantity_in).toString()
     ]) || [];
 
     autoTable(doc, {
       startY: y + 5,
-      head: [['MATERIAL', 'ENTREGUE', 'RECOLHIDO']],
+      head: [['MATERIAL', 'ENTREGUE', 'RECOLHIDO', 'PENDENTE']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillColor: [0, 51, 102], textColor: [255, 255, 255], fontStyle: 'bold' },
       styles: { fontSize: 9, cellPadding: 3, font: 'helvetica' },
       columnStyles: {
         0: { cellWidth: 'auto' },
-        1: { cellWidth: 30, halign: 'center' },
-        2: { cellWidth: 30, halign: 'center' }
+        1: { cellWidth: 25, halign: 'center' },
+        2: { cellWidth: 25, halign: 'center' },
+        3: { cellWidth: 25, halign: 'center', fontStyle: 'bold' }
       },
       margin: { left: 20, right: 20 },
       didDrawPage: (data) => {
@@ -572,16 +810,192 @@ export default function App() {
       }
     });
 
-    const blob = doc.output('blob');
-    const url = URL.createObjectURL(blob);
-    setPdfPreview({ url, output });
+    doc.save(`Ordem_Entrega_${output.id}.pdf`);
   };
 
-  const closePdfPreview = () => {
-    if (pdfPreview?.url.startsWith('blob:')) {
-      URL.revokeObjectURL(pdfPreview.url);
+  const handlePrintDailyReport = (date: string) => {
+    const doc = new jsPDF();
+    const dayOutputs = outputs.filter(o => o.delivery_date?.split('T')[0] === date);
+    const dayActiveRecolhas = outputs.filter(o => 
+      o.collection_date?.split('T')[0] === date && 
+      o.items?.some(item => item.quantity_out > item.quantity_in)
+    );
+    const dayMovements = movements.filter(m => 
+      m.type === 'IN' && 
+      m.date.split('T')[0] === date &&
+      (m.observations?.includes('Recolha') || m.observations?.includes('Retorno'))
+    );
+
+    // Header Styling
+    doc.setFillColor(0, 51, 102);
+    doc.rect(0, 0, 210, 40, 'F');
+    doc.setFontSize(22);
+    doc.setTextColor(255, 255, 255);
+    doc.text('DASHBOARD DIÁRIO A2R', 20, 25);
+    doc.setFontSize(10);
+    doc.text(`Gerado em: ${new Date().toLocaleString()}`, 140, 25);
+
+    doc.setFontSize(12);
+    doc.setTextColor(50, 50, 50);
+    doc.text(`Data de Referência: ${new Date(date).toLocaleDateString()}`, 20, 50);
+
+    let yPos = 65;
+
+    // Summary Cards (Visual Representation)
+    const drawCard = (x: number, y: number, w: number, h: number, title: string, value: string, color: [number, number, number]) => {
+      doc.setDrawColor(color[0], color[1], color[2]);
+      doc.setLineWidth(0.5);
+      doc.roundedRect(x, y, w, h, 3, 3, 'D');
+      doc.setFontSize(8);
+      doc.setTextColor(100);
+      doc.text(title.toUpperCase(), x + 5, y + 8);
+      doc.setFontSize(16);
+      doc.setTextColor(color[0], color[1], color[2]);
+      doc.text(value, x + 5, y + 20);
+    };
+
+    drawCard(20, yPos, 55, 30, 'Entregas', dayOutputs.length.toString(), [239, 68, 68]);
+    drawCard(80, yPos, 55, 30, 'Recolhas Agend.', dayActiveRecolhas.length.toString(), [16, 185, 129]);
+    drawCard(140, yPos, 55, 30, 'Recolhas Efetuadas', dayMovements.length.toString(), [59, 130, 246]);
+
+    yPos += 45;
+
+    // Entregas Table
+    if (dayOutputs.length > 0) {
+      doc.setFontSize(12);
+      doc.setTextColor(0, 51, 102);
+      doc.text('LISTAGEM DE ENTREGAS', 20, yPos);
+      autoTable(doc, {
+        startY: yPos + 5,
+        head: [['ID', 'Cliente', 'Local', 'Hora']],
+        body: dayOutputs.map(o => [
+          o.id, 
+          o.client_name, 
+          o.location_name, 
+          o.delivery_date ? new Date(o.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''
+        ]),
+        theme: 'grid',
+        headStyles: { fillColor: [239, 68, 68] },
+        styles: { fontSize: 8 }
+      });
+      yPos = (doc as any).lastAutoTable.finalY + 15;
     }
-    setPdfPreview(null);
+
+    // Recolhas Agendadas Table
+    if (dayActiveRecolhas.length > 0) {
+      if (yPos > 240) { doc.addPage(); yPos = 20; }
+      doc.setFontSize(12);
+      doc.setTextColor(0, 51, 102);
+      doc.text('LISTAGEM DE RECOLHAS AGENDADAS', 20, yPos);
+      autoTable(doc, {
+        startY: yPos + 5,
+        head: [['ID', 'Cliente', 'Local', 'Hora']],
+        body: dayActiveRecolhas.map(o => [
+          o.id, 
+          o.client_name, 
+          o.location_name, 
+          o.collection_date ? new Date(o.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''
+        ]),
+        theme: 'grid',
+        headStyles: { fillColor: [16, 185, 129] },
+        styles: { fontSize: 8 }
+      });
+      yPos = (doc as any).lastAutoTable.finalY + 15;
+    }
+
+    // Footer
+    const pageCount = (doc as any).internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(150);
+      doc.text(`A2R Gestão de Eventos - Página ${i} de ${pageCount}`, 105, 290, { align: 'center' });
+    }
+
+    doc.save(`A2R_Relatorio_Diario_${date}.pdf`);
+  };
+
+  const handlePrintCategoryReport = (date: string, category: 'ENTREGAS' | 'ATIVAS' | 'EFETUADAS') => {
+    const doc = new jsPDF();
+    let reportTitle = '';
+    let reportData: any[] = [];
+    let reportColor: [number, number, number] = [0, 0, 0];
+
+    if (category === 'ENTREGAS') {
+      reportTitle = 'RELATÓRIO DE ENTREGAS';
+      reportColor = [239, 68, 68];
+      const items = outputs.filter(o => o.delivery_date?.split('T')[0] === date);
+      reportData = items.map(o => [o.id, o.client_name, o.location_name, o.delivery_date ? new Date(o.delivery_date).toLocaleTimeString() : '']);
+    } else if (category === 'ATIVAS') {
+      reportTitle = 'RELATÓRIO DE RECOLHAS AGENDADAS';
+      reportColor = [16, 185, 129];
+      const items = outputs.filter(o => 
+        o.collection_date?.split('T')[0] === date && 
+        o.items?.some(item => item.quantity_out > item.quantity_in)
+      );
+      reportData = items.map(o => [o.id, o.client_name, o.location_name, o.collection_date ? new Date(o.collection_date).toLocaleTimeString() : '']);
+    } else {
+      reportTitle = 'RELATÓRIO DE RECOLHAS EFETUADAS';
+      reportColor = [59, 130, 246];
+      const dayMovements = movements.filter(m => 
+        m.type === 'IN' && 
+        m.date.split('T')[0] === date &&
+        (m.observations?.includes('Recolha') || m.observations?.includes('Retorno'))
+      );
+      
+      // Group by output ID for spacing
+      const grouped = dayMovements.reduce((acc, m) => {
+        const outputIdMatch = m.observations?.match(/#(\d+)/);
+        const outputId = outputIdMatch ? outputIdMatch[1] : 'AVULSA';
+        if (!acc[outputId]) acc[outputId] = [];
+        acc[outputId].push(m);
+        return acc;
+      }, {} as Record<string, Movement[]>);
+
+      Object.entries(grouped).forEach(([outputId, movs], index) => {
+        (movs as Movement[]).forEach(m => {
+          const output = outputId !== 'AVULSA' ? outputs.find(o => o.id === parseInt(outputId)) : null;
+          reportData.push([
+            m.id,
+            output?.type || 'N/A',
+            output?.client_name || 'N/A',
+            output?.client_contact || '',
+            output?.location_name || 'N/A',
+            output?.space_at_location || '',
+            m.article_description,
+            m.quantity === 0 ? '' : m.quantity.toString(),
+            m.date ? new Date(m.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''
+          ]);
+        });
+        // Add empty row for spacing between groups
+        if (index < Object.entries(grouped).length - 1) {
+          reportData.push(['', '', '', '', '', '', '', '', '']);
+        }
+      });
+    }
+
+    doc.setFontSize(18);
+    doc.setTextColor(reportColor[0], reportColor[1], reportColor[2]);
+    doc.text(reportTitle, 20, 20);
+    doc.setFontSize(10);
+    doc.setTextColor(100);
+    doc.text(`Data: ${new Date(date).toLocaleDateString()}`, 20, 28);
+
+    const head = category === 'EFETUADAS' 
+      ? [['ID', 'Tipo', 'Cliente', 'Contato', 'Local', 'Espaço', 'Artigo', 'Qtd', 'Hora']]
+      : [['ID', 'Cliente', 'Local', 'Hora']];
+
+    autoTable(doc, {
+      startY: 35,
+      head: head,
+      body: reportData,
+      theme: 'grid',
+      headStyles: { fillColor: reportColor },
+      styles: { fontSize: 8 },
+      margin: { left: 10, right: 10 }
+    });
+
+    doc.save(`A2R_Relatorio_${category}_${date}.pdf`);
   };
 
   const handleDeleteMovement = async (id: number) => {
@@ -677,6 +1091,90 @@ export default function App() {
         const data = await res.json();
         setError(data.error);
       }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
+  const generateStockReport = async (article: Article, pendingDeliveries: number, totalStock: number, articleMovements: any[]) => {
+    const doc = new jsPDF();
+    const today = new Date();
+    
+    setLoading(true);
+    
+    try {
+      // Header Styling (matching Dashboard)
+      doc.setFillColor(0, 51, 102);
+      doc.rect(0, 0, 210, 40, 'F');
+      doc.setFontSize(22);
+      doc.setTextColor(255, 255, 255);
+      doc.text('DASHBOARD DE STOCK A2R', 20, 25);
+      doc.setFontSize(10);
+      doc.text(`Gerado em: ${new Date().toLocaleString()}`, 140, 25);
+
+      doc.setFontSize(12);
+      doc.setTextColor(50, 50, 50);
+      doc.text(`Artigo: ${article.description} (${article.code})`, 20, 50);
+
+      let yPos = 65;
+
+      // Summary Cards
+      const drawCard = (x: number, y: number, w: number, h: number, title: string, value: string, color: [number, number, number]) => {
+        doc.setDrawColor(color[0], color[1], color[2]);
+        doc.setLineWidth(0.5);
+        doc.roundedRect(x, y, w, h, 3, 3, 'D');
+        doc.setFontSize(8);
+        doc.setTextColor(100);
+        doc.text(title.toUpperCase(), x + 5, y + 8);
+        doc.setFontSize(16);
+        doc.setTextColor(color[0], color[1], color[2]);
+        doc.text(value, x + 5, y + 20);
+      };
+
+      drawCard(20, yPos, 55, 30, 'Stock Atual', article.available_stock.toString(), [35, 78, 122]);
+      drawCard(80, yPos, 55, 30, 'Entregas Pend.', pendingDeliveries.toString(), [79, 70, 229]);
+      drawCard(140, yPos, 55, 30, 'Stock Total', totalStock.toString(), [30, 64, 175]);
+
+      yPos += 45;
+      
+      // Movements Table
+      if (articleMovements.length > 0) {
+        doc.setFontSize(12);
+        doc.setTextColor(0, 51, 102);
+        doc.text('MOVIMENTOS ATIVOS', 20, yPos);
+        
+        const tableData = articleMovements.map(m => [
+          m.type,
+          `${m.client_name}${m.client_contact ? ` (${m.client_contact})` : ''}\n${m.location}`,
+          m.quantity - m.returned,
+          format(new Date(m.delivery_date), 'dd/MM/yyyy'),
+          format(new Date(m.collection_date), 'dd/MM/yyyy')
+        ]);
+        
+        autoTable(doc, {
+          startY: yPos + 5,
+          head: [['Tipo', 'Cliente / Localização', 'Qtd. Pendente', 'Data Entrega', 'Data Recolha']],
+          body: tableData,
+          theme: 'grid',
+          headStyles: { fillColor: [35, 78, 122] },
+          styles: { fontSize: 8 }
+        });
+      }
+      
+      // Footer
+      const pageCount = (doc as any).internal.getNumberOfPages();
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(150);
+        doc.text(`A2R Gestão de Eventos - Página ${i} de ${pageCount}`, 105, 290, { align: 'center' });
+      }
+
+      doc.save(`A2R_Dashboard_Stock_${article.code}_${format(today, 'yyyyMMdd')}.pdf`);
+    } catch (err) {
+      console.error('Error generating PDF:', err);
+      setToast({ message: 'Erro ao gerar PDF', type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -990,7 +1488,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-5xl w-full mx-auto p-6 overflow-hidden">
+      <main className="flex-1 max-w-5xl w-full mx-auto p-6 overflow-y-auto custom-scrollbar">
         <AnimatePresence mode="wait">
           {view === 'menu' && (
             <motion.div
@@ -998,57 +1496,114 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
-              className="grid grid-cols-2 gap-6"
+              className="flex flex-col space-y-8 pb-10"
             >
-              <button
-                onClick={() => setView('articles')}
-                className="flex flex-col items-center justify-center p-8 bg-white rounded-3xl shadow-lg border border-slate-100 hover:shadow-xl hover:scale-105 transition-all group"
-              >
-                <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center text-a2r-blue-dark mb-4 group-hover:bg-a2r-blue-dark group-hover:text-white transition-colors">
-                  <Package size={32} />
+              {/* Welcome Section */}
+              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+                <div>
+                  <h2 className="text-3xl font-bold text-slate-900 tracking-tight font-display">
+                    Olá, <span className="a2r-text-gradient">{user?.name.split(' ')[0]}</span>!
+                  </h2>
+                  <p className="text-slate-500 font-medium">Painel de Controlo A2R Logística</p>
                 </div>
-                <span className="text-lg font-bold text-slate-800">Artigos</span>
-              </button>
+                <div className="bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-3">
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                  <span className="text-xs font-bold text-slate-600 uppercase tracking-widest font-display">
+                    {new Date().toLocaleDateString('pt-PT', { weekday: 'long', day: 'numeric', month: 'long' })}
+                  </span>
+                </div>
+              </div>
 
-              <button
-                onClick={() => setView('outputs')}
-                className="flex flex-col items-center justify-center p-8 bg-white rounded-3xl shadow-lg border border-slate-100 hover:shadow-xl hover:scale-105 transition-all group"
-              >
-                <div className="w-16 h-16 bg-red-50 rounded-2xl flex items-center justify-center text-red-500 mb-4 group-hover:bg-red-500 group-hover:text-white transition-colors">
-                  <ArrowUpRight size={32} />
-                </div>
-                <span className="text-lg font-bold text-slate-800">Entregas</span>
-              </button>
+              {/* Bento Grid Menu */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 md:gap-6">
+                {/* Main Actions - Larger Cards */}
+                <button
+                  onClick={() => setView('outputs')}
+                  className="sm:col-span-2 md:col-span-2 flex flex-col justify-between p-6 md:p-8 bg-white rounded-3xl md:rounded-[2.5rem] shadow-xl shadow-blue-100/20 border border-slate-100 hover:shadow-2xl hover:-translate-y-1 transition-all group relative overflow-hidden"
+                >
+                  <div className="absolute top-0 right-0 w-48 h-48 bg-blue-50 rounded-full -mr-24 -mt-24 group-hover:scale-125 transition-transform duration-700 opacity-40" />
+                  <div className="relative">
+                    <div className="w-14 h-14 md:w-16 md:h-16 a2r-gradient rounded-2xl flex items-center justify-center text-white mb-4 md:mb-6 shadow-lg shadow-blue-200">
+                      <ArrowUpRight size={28} className="md:w-8 md:h-8" />
+                    </div>
+                    <h3 className="text-2xl md:text-3xl font-bold text-slate-900 mb-1 md:mb-2 font-display">Entregas</h3>
+                    <p className="text-slate-500 text-xs md:text-sm max-w-[240px] font-medium">Gestão de saídas, alugueres e serviços externos.</p>
+                  </div>
+                  <div className="flex items-center gap-2 mt-6 md:mt-8 text-a2r-blue-dark font-bold text-xs md:text-sm uppercase tracking-widest font-display">
+                    Gerir Saídas <ChevronRight size={14} className="md:w-4 md:h-4" />
+                  </div>
+                </button>
 
-              <button
-                onClick={() => setView('inputs')}
-                className="flex flex-col items-center justify-center p-8 bg-white rounded-3xl shadow-lg border border-slate-100 hover:shadow-xl hover:scale-105 transition-all group"
-              >
-                <div className="w-16 h-16 bg-emerald-50 rounded-2xl flex items-center justify-center text-emerald-500 mb-4 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
-                  <ArrowDownLeft size={32} />
-                </div>
-                <span className="text-lg font-bold text-slate-800">Recolhas</span>
-              </button>
+                <button
+                  onClick={() => setView('inputs')}
+                  className="flex flex-col justify-between p-6 md:p-8 bg-white rounded-3xl md:rounded-[2.5rem] shadow-xl shadow-emerald-100/20 border border-slate-100 hover:shadow-2xl hover:-translate-y-1 transition-all group relative overflow-hidden"
+                >
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-50 rounded-full -mr-16 -mt-16 group-hover:scale-125 transition-transform duration-700 opacity-40" />
+                  <div className="relative">
+                    <div className="w-14 h-14 md:w-16 md:h-16 bg-emerald-500 rounded-2xl flex items-center justify-center text-white mb-4 md:mb-6 shadow-lg shadow-emerald-200">
+                      <ArrowDownLeft size={28} className="md:w-8 md:h-8" />
+                    </div>
+                    <h3 className="text-2xl md:text-3xl font-bold text-slate-900 mb-1 md:mb-2 font-display">Recolhas</h3>
+                    <p className="text-slate-500 text-xs md:text-sm font-medium">Entrada de material e retornos de clientes.</p>
+                  </div>
+                  <div className="flex items-center gap-2 mt-6 md:mt-8 text-emerald-600 font-bold text-xs md:text-sm uppercase tracking-widest font-display">
+                    Gerir Entradas <ChevronRight size={14} className="md:w-4 md:h-4" />
+                  </div>
+                </button>
 
-              <button
-                onClick={() => setView('calendar')}
-                className="flex flex-col items-center justify-center p-8 bg-white rounded-3xl shadow-lg border border-slate-100 hover:shadow-xl hover:scale-105 transition-all group"
-              >
-                <div className="w-16 h-16 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 mb-4 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
-                  <Calendar size={32} />
-                </div>
-                <span className="text-lg font-bold text-slate-800">Calendário</span>
-              </button>
+                {/* Secondary Actions */}
+                <button
+                  onClick={() => setView('articles')}
+                  className="flex flex-col items-center justify-center p-6 md:p-8 bg-white rounded-3xl md:rounded-[2.5rem] shadow-lg border border-slate-100 hover:shadow-xl hover:-translate-y-1 transition-all group"
+                >
+                  <div className="w-14 h-14 md:w-20 md:h-20 bg-slate-50 rounded-2xl md:rounded-[2rem] flex items-center justify-center text-slate-600 mb-3 md:mb-4 group-hover:bg-a2r-blue-dark group-hover:text-white transition-all duration-300">
+                    <Package size={28} className="md:w-10 md:h-10" />
+                  </div>
+                  <span className="text-lg md:text-xl font-bold text-slate-900 font-display">Artigos</span>
+                  <span className="text-[10px] md:text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">{articles.length} Itens em Catálogo</span>
+                </button>
 
-              <button
-                onClick={() => setView('history')}
-                className="flex flex-col items-center justify-center p-8 bg-white rounded-3xl shadow-lg border border-slate-100 hover:shadow-xl hover:scale-105 transition-all group"
-              >
-                <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-600 mb-4 group-hover:bg-slate-600 group-hover:text-white transition-colors">
-                  <History size={32} />
-                </div>
-                <span className="text-lg font-bold text-slate-800">Histórico</span>
-              </button>
+                <button
+                  onClick={() => setView('calendar')}
+                  className="flex flex-col items-center justify-center p-6 md:p-8 bg-white rounded-3xl md:rounded-[2.5rem] shadow-lg border border-slate-100 hover:shadow-xl hover:-translate-y-1 transition-all group"
+                >
+                  <div className="w-14 h-14 md:w-20 md:h-20 bg-indigo-50 rounded-2xl md:rounded-[2rem] flex items-center justify-center text-indigo-600 mb-3 md:mb-4 group-hover:bg-indigo-600 group-hover:text-white transition-all duration-300">
+                    <Calendar size={28} className="md:w-10 md:h-10" />
+                  </div>
+                  <span className="text-lg md:text-xl font-bold text-slate-900 font-display">Calendário</span>
+                  <span className="text-[10px] md:text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">Agenda de Operações</span>
+                </button>
+
+                <button
+                  onClick={() => setView('position')}
+                  className="flex flex-col items-center justify-center p-6 md:p-8 bg-white rounded-3xl md:rounded-[2.5rem] shadow-lg border border-slate-100 hover:shadow-xl hover:-translate-y-1 transition-all group"
+                >
+                  <div className="w-14 h-14 md:w-20 md:h-20 bg-orange-50 rounded-2xl md:rounded-[2rem] flex items-center justify-center text-orange-600 mb-3 md:mb-4 group-hover:bg-orange-600 group-hover:text-white transition-all duration-300">
+                    <MapPin size={28} className="md:w-10 md:h-10" />
+                  </div>
+                  <span className="text-lg md:text-xl font-bold text-slate-900 font-display">Posição</span>
+                  <span className="text-[10px] md:text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">Controlo de Stocks</span>
+                </button>
+
+                {/* Full Width Stats/History Link */}
+                <button
+                  onClick={() => setView('history')}
+                  className="sm:col-span-2 md:col-span-3 flex items-center justify-between p-5 md:p-8 a2r-gradient rounded-3xl md:rounded-[2.5rem] shadow-xl hover:opacity-95 transition-all group"
+                >
+                  <div className="flex items-center gap-3 md:gap-6">
+                    <div className="w-12 h-12 md:w-16 md:h-16 bg-white/20 rounded-xl md:rounded-2xl flex items-center justify-center text-white backdrop-blur-sm">
+                      <History size={24} className="md:w-8 md:h-8" />
+                    </div>
+                    <div className="text-left">
+                      <h4 className="text-white text-lg md:text-xl font-bold font-display">Histórico de Movimentos</h4>
+                      <p className="text-white/70 text-[10px] md:text-sm font-medium">Auditoria completa de todas as entradas e saídas.</p>
+                    </div>
+                  </div>
+                  <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-white/10 flex items-center justify-center text-white group-hover:bg-white group-hover:text-a2r-blue-dark transition-all">
+                    <ChevronRight size={20} className="md:w-6 md:h-6" />
+                  </div>
+                </button>
+              </div>
             </motion.div>
           )}
 
@@ -1287,149 +1842,1087 @@ export default function App() {
               className="flex flex-col h-full space-y-6"
             >
               <div className="flex items-center justify-between shrink-0">
-                <h2 className="text-2xl font-bold text-slate-800">Calendário</h2>
+                <h2 className="text-2xl font-bold text-slate-800">
+                  {showCalendarDetail ? `Detalhes: ${new Date(calendarDate).toLocaleDateString()}` : 'Calendário'}
+                </h2>
                 <div className="flex gap-2">
-                  <button 
-                    onClick={() => setCalendarDate(new Date().toISOString().split('T')[0])}
-                    className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl font-medium hover:bg-slate-200 transition-all"
-                  >
-                    Hoje
-                  </button>
-                  <button 
-                    onClick={() => setView('menu')}
-                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
-                  >
-                    <X size={24} />
-                  </button>
+                  {showCalendarDetail ? (
+                    <button 
+                      onClick={() => setShowCalendarDetail(false)}
+                      className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl font-medium hover:bg-slate-200 transition-all flex items-center gap-2"
+                    >
+                      <ChevronLeft size={18} />
+                      Voltar ao Mês
+                    </button>
+                  ) : (
+                    <>
+                      <button 
+                        onClick={() => {
+                          setCalendarViewDate(new Date());
+                          setCalendarDate(new Date().toISOString().split('T')[0]);
+                        }}
+                        className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl font-medium hover:bg-slate-200 transition-all"
+                      >
+                        Hoje
+                      </button>
+                      <button 
+                        onClick={() => setView('menu')}
+                        className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                      >
+                        <X size={24} />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
-              <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm shrink-0">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600">
-                    <Calendar size={24} />
+              {!showCalendarDetail ? (
+                <div className="flex flex-col h-full bg-white rounded-3xl border border-slate-100 shadow-xl overflow-hidden">
+                  {/* Calendar Header */}
+                  <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                    <h3 className="text-xl font-bold text-slate-800 capitalize">
+                      {calendarViewDate.toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' })}
+                    </h3>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1))}
+                        className="p-2 hover:bg-white rounded-xl border border-slate-200 transition-all text-slate-600"
+                      >
+                        <ChevronLeft size={20} />
+                      </button>
+                      <button 
+                        onClick={() => setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1))}
+                        className="p-2 hover:bg-white rounded-xl border border-slate-200 transition-all text-slate-600"
+                      >
+                        <ChevronRight size={20} />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex-1">
-                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Data Selecionada</label>
+
+                  {/* Calendar Grid Headers */}
+                  <div className="px-4 pt-4 shrink-0">
+                    <div className="grid grid-cols-7 gap-1 sm:gap-2">
+                      {['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'].map((day, index) => (
+                        <div key={day} className={`text-center text-[10px] font-bold uppercase tracking-widest py-2 ${index >= 5 ? 'text-red-600' : 'text-slate-400'}`}>
+                          {day}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Calendar Grid Body */}
+                  <div className="flex-1 overflow-y-auto p-4 pt-0 custom-scrollbar">
+                    <div className="grid grid-cols-7 gap-1 sm:gap-2">
+                      {(() => {
+                        const year = calendarViewDate.getFullYear();
+                        const month = calendarViewDate.getMonth();
+                        const daysInMonth = new Date(year, month + 1, 0).getDate();
+                        const firstDay = new Date(year, month, 1).getDay();
+                        const adjustedFirstDay = firstDay === 0 ? 6 : firstDay - 1;
+                        const days = [];
+
+                        // Empty slots for previous month
+                        for (let i = 0; i < adjustedFirstDay; i++) {
+                          days.push(<div key={`empty-${i}`} className="aspect-square"></div>);
+                        }
+
+                        // Days of current month
+                        for (let d = 1; d <= daysInMonth; d++) {
+                          const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                          const dObj = new Date(year, month, d);
+                          const isToday = dateStr === new Date().toISOString().split('T')[0];
+                          const isWeekend = dObj.getDay() === 0 || dObj.getDay() === 6;
+                          const isHolidayDay = isHoliday(dObj);
+                          const isSpecialDay = isWeekend || isHolidayDay;
+                          
+                          // Calculate counts
+                          const entregaCount = outputs.filter(o => o.delivery_date?.split('T')[0] === dateStr).length;
+                          const recolhaAtivaCount = outputs.filter(o => 
+                            o.collection_date?.split('T')[0] === dateStr && 
+                            o.items?.some(item => item.quantity_out > item.quantity_in)
+                          ).length;
+                          const recolhaEfetuadaCount = movements.filter(m => 
+                            m.type === 'IN' && 
+                            m.date.split('T')[0] === dateStr &&
+                            (m.observations?.includes('Recolha') || m.observations?.includes('Retorno'))
+                          ).length;
+
+                          days.push(
+                            <button
+                              key={d}
+                              onClick={() => {
+                                setCalendarDate(dateStr);
+                                setShowCalendarDetail(true);
+                              }}
+                              className={`aspect-square p-2 rounded-2xl border transition-all flex flex-col items-center justify-between relative group ${
+                                isToday 
+                                  ? 'bg-indigo-50 border-indigo-200 ring-2 ring-indigo-100' 
+                                  : isHolidayDay
+                                    ? 'bg-orange-50/50 border-orange-100 hover:border-orange-200 hover:shadow-md'
+                                    : isWeekend
+                                      ? 'bg-red-50/30 border-red-100 hover:border-red-200 hover:shadow-md'
+                                      : 'bg-white border-slate-100 hover:border-indigo-200 hover:shadow-md'
+                              }`}
+                            >
+                              <span className={`text-sm font-bold ${isToday ? 'text-indigo-600' : isHolidayDay ? 'text-orange-600' : isWeekend ? 'text-red-600' : 'text-slate-700'}`}>{d}</span>
+                              
+                              <div className="flex flex-col gap-0.5 w-full mt-1">
+                                {entregaCount > 0 && (
+                                  <div className="flex items-center justify-center bg-red-500 text-white text-[8px] font-bold rounded-full h-3 min-w-3 px-1">
+                                    {entregaCount}
+                                  </div>
+                                )}
+                                {recolhaAtivaCount > 0 && (
+                                  <div className="flex items-center justify-center bg-emerald-500 text-white text-[8px] font-bold rounded-full h-3 min-w-3 px-1">
+                                    {recolhaAtivaCount}
+                                  </div>
+                                )}
+                                {recolhaEfetuadaCount > 0 && (
+                                  <div className="flex items-center justify-center bg-blue-500 text-white text-[8px] font-bold rounded-full h-3 min-w-3 px-1">
+                                    {recolhaEfetuadaCount}
+                                  </div>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        }
+                        return days;
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Legend */}
+                  <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex flex-wrap gap-4 justify-center">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Entregas</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Recolhas Ativas</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Recolhas Efetuadas</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto pr-2 space-y-8 custom-scrollbar pb-20">
+                  {/* Calendar Filters */}
+                  <div className="flex flex-col gap-4 mb-6">
+                    <div className="flex items-center justify-between bg-slate-50 p-2 rounded-2xl border border-slate-200">
+                      <div className="flex gap-1">
+                        <button 
+                          onClick={() => setCalendarFilter('ALL')}
+                          className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase transition-all ${calendarFilter === 'ALL' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-200'}`}
+                        >
+                          Todos
+                        </button>
+                        <button 
+                          onClick={() => setCalendarFilter('ENTREGAS')}
+                          className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase transition-all ${calendarFilter === 'ENTREGAS' ? 'bg-red-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-200'}`}
+                        >
+                          Entregas
+                        </button>
+                        <button 
+                          onClick={() => setCalendarFilter('ATIVAS')}
+                          className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase transition-all ${calendarFilter === 'ATIVAS' ? 'bg-emerald-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-200'}`}
+                        >
+                          Ativas
+                        </button>
+                        <button 
+                          onClick={() => setCalendarFilter('EFETUADAS')}
+                          className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase transition-all ${calendarFilter === 'EFETUADAS' ? 'bg-blue-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-200'}`}
+                        >
+                          Efetuadas
+                        </button>
+                      </div>
+                      <button 
+                        onClick={() => handlePrintDailyReport(calendarDate)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-white rounded-xl text-[10px] font-bold uppercase hover:bg-slate-900 transition-all shadow-sm"
+                      >
+                        <BarChart3 size={14} />
+                        Dashboard
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Entregas Section */}
+                  {(calendarFilter === 'ALL' || calendarFilter === 'ENTREGAS') && (
+                    <section className="space-y-4">
+                      <div className="flex items-center justify-between px-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                          <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Entregas do Dia</h3>
+                        </div>
+                        <button 
+                          onClick={() => handlePrintCategoryReport(calendarDate, 'ENTREGAS')}
+                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                          title="Relatório de Entregas"
+                        >
+                          <FileText size={16} />
+                        </button>
+                      </div>
+                      {(() => {
+                        const dayOutputs = outputs.filter(o => o.delivery_date?.split('T')[0] === calendarDate);
+                        if (dayOutputs.length === 0) return <p className="text-sm text-slate-400 italic px-2">Nenhuma entrega agendada para este dia.</p>;
+                        return dayOutputs.map(output => {
+                          const isExpanded = expandedEntregas[output.id] || false;
+                          return (
+                            <div key={`cal-out-${output.id}`} className="bg-white rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all overflow-hidden">
+                              <div className="p-6">
+                                <div className="flex justify-between items-start mb-4">
+                                  <div className="flex flex-wrap gap-2">
+                                    <span className="text-[10px] font-bold text-red-500 uppercase bg-red-50 px-2 py-1 rounded-lg">#{output.id}</span>
+                                    <span className="text-[10px] font-bold text-slate-500 uppercase bg-slate-100 px-2 py-1 rounded-lg">{output.type}</span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button 
+                                      onClick={() => handlePrintOutput(output)}
+                                      className="p-2 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-xl transition-all"
+                                      title="Imprimir PDF"
+                                    >
+                                      <Printer size={18} />
+                                    </button>
+                                    <button 
+                                      onClick={() => {
+                                        setEditingOutputId(output.id);
+                                        setOutputForm({
+                                          type: output.type,
+                                          client_name: output.client_name,
+                                          client_contact: output.client_contact,
+                                          delivery_date: output.delivery_date,
+                                          assembly_date: output.assembly_date,
+                                          collection_date: output.collection_date,
+                                          with_assembly: output.with_assembly,
+                                          location_name: output.location_name,
+                                          space_at_location: output.space_at_location,
+                                          delivery_employee: output.delivery_employee,
+                                          collection_employee: output.collection_employee,
+                                          items: [...(output.items || [])]
+                                        });
+                                        setShowOutputForm(true);
+                                        setView('outputs');
+                                        setViewSource('calendar');
+                                      }}
+                                      className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-all"
+                                      title="Editar"
+                                    >
+                                      <Edit size={18} />
+                                    </button>
+                                    <button 
+                                      onClick={() => handleDeleteOutput(output.id)}
+                                      className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                                      title="Eliminar"
+                                    >
+                                      <Trash2 size={18} />
+                                    </button>
+                                    <button 
+                                      onClick={() => setExpandedEntregas(prev => ({ ...prev, [output.id]: !isExpanded }))}
+                                      className="p-2 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-xl transition-all"
+                                      title={isExpanded ? "Ocultar Artigos" : "Ver Artigos"}
+                                    >
+                                      {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                  <div className="space-y-3">
+                                    <div>
+                                      <p className="font-bold text-slate-800">{output.client_name}</p>
+                                      <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                                        <Phone size={12} />
+                                        {output.client_contact}
+                                      </p>
+                                    </div>
+                                    <div>
+                                      <p className="text-sm text-slate-700 font-medium flex items-center gap-1">
+                                        <MapPin size={14} className="text-slate-400" />
+                                        {output.location_name}
+                                      </p>
+                                      {output.space_at_location && (
+                                        <p className="text-xs text-slate-500 mt-0.5 ml-4.5 italic">{output.space_at_location}</p>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                    <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                                      <div className="text-center">
+                                        <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem vai entregar</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}</p>
+                                        <p className="text-[9px] text-slate-500 mb-1">{output.delivery_date ? new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <input 
+                                          type="text"
+                                          list="employees-list"
+                                          placeholder="Funcionário..."
+                                          className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
+                                          value={output.delivery_employee || ''}
+                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                        />
+                                      </div>
+                                      <div className="text-center border-x border-slate-200">
+                                        <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Montagem</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{output.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}</p>
+                                        <p className="text-[9px] text-slate-500">{output.assembly_date ? new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                      </div>
+                                      <div className="text-center">
+                                        <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem fez recolha</p>
+                                        <p className="text-[10px] font-bold text-emerald-600">{output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}</p>
+                                        <p className="text-[9px] text-emerald-500 mb-1">{output.collection_date ? new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <input 
+                                          type="text"
+                                          list="employees-list"
+                                          placeholder="Funcionário..."
+                                          className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
+                                          value={output.collection_employee || ''}
+                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                        />
+                                      </div>
+                                    <div className="col-span-3 text-right pt-1 border-t border-slate-200 mt-1">
+                                      <p className="text-[9px] font-bold text-emerald-600 uppercase tracking-wider">
+                                        Artigos Pendentes: {output.items?.filter(item => item.quantity_out > item.quantity_in).length}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Articles List (Collapsible) */}
+                              <AnimatePresence>
+                                {isExpanded && (
+                                  <motion.div 
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: 'auto', opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    className="border-t border-slate-100 bg-slate-50/50"
+                                  >
+                                    <div className="p-4 space-y-2">
+                                      {output.items?.map(item => (
+                                        <div key={`item-${output.id}-${item.article_id}`} className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between shadow-sm">
+                                          <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 bg-slate-50 rounded-lg flex items-center justify-center text-slate-400 border border-slate-100">
+                                              <Package size={16} />
+                                            </div>
+                                            <div>
+                                              <p className="text-xs font-bold text-slate-800">{item.article_description}</p>
+                                              <p className="text-[10px] text-slate-500">{item.article_code}</p>
+                                            </div>
+                                          </div>
+                                          <div className="flex gap-4">
+                                            <div className="text-center">
+                                              <p className="text-sm font-black text-red-600">{item.quantity_out}</p>
+                                              <p className="text-[8px] text-red-400 font-bold uppercase">Entregue</p>
+                                            </div>
+                                            <div className="text-center">
+                                              <p className="text-sm font-black text-emerald-600">{item.quantity_in}</p>
+                                              <p className="text-[8px] text-emerald-400 font-bold uppercase">Recolhido</p>
+                                            </div>
+                                            <div className="text-center border-l border-slate-100 pl-4">
+                                              <p className="text-sm font-black text-red-500">{item.quantity_out - item.quantity_in}</p>
+                                              <p className="text-[8px] text-red-400 font-bold uppercase">Falta</p>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </section>
+                  )}
+
+                  {/* Recolhas Ativas Section */}
+                  {(calendarFilter === 'ALL' || calendarFilter === 'ATIVAS') && (
+                    <section className="space-y-4">
+                      <div className="flex items-center justify-between px-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                          <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Recolhas Ativas (Agendadas)</h3>
+                        </div>
+                        <button 
+                          onClick={() => handlePrintCategoryReport(calendarDate, 'ATIVAS')}
+                          className="p-1.5 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-all"
+                          title="Relatório de Recolhas Ativas"
+                        >
+                          <FileText size={16} />
+                        </button>
+                        <button 
+                          onClick={() => handlePrintCategoryReport(calendarDate, 'ATIVAS')}
+                          className="p-1.5 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-lg transition-all"
+                          title="Relatório de Recolhas Ativas"
+                        >
+                          <FileText size={16} />
+                        </button>
+                      </div>
+                      {(() => {
+                        const dayActiveRecolhas = outputs.filter(o => 
+                          o.collection_date?.split('T')[0] === calendarDate && 
+                          o.items?.some(item => item.quantity_out > item.quantity_in)
+                        );
+                        if (dayActiveRecolhas.length === 0) return <p className="text-sm text-slate-400 italic px-2">Nenhuma recolha ativa agendada para este dia.</p>;
+                        return dayActiveRecolhas.map(output => {
+                          const isExpanded = expandedAtivas[output.id] || false;
+                          return (
+                            <div key={`cal-act-${output.id}`} className="bg-white rounded-3xl border border-emerald-100 shadow-sm hover:shadow-md transition-all border-l-4 border-l-emerald-500 overflow-hidden">
+                              <div className="p-6">
+                                <div className="flex justify-between items-start mb-4">
+                                  <div className="flex flex-wrap gap-2">
+                                    <span className="text-[10px] font-bold text-emerald-500 uppercase bg-emerald-50 px-2 py-1 rounded-lg">#{output.id}</span>
+                                    <span className="text-[10px] font-bold text-slate-500 uppercase bg-slate-100 px-2 py-1 rounded-lg">{output.type}</span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button 
+                                      onClick={() => handlePrintOutput(output)}
+                                      className="p-2 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-xl transition-all"
+                                      title="Imprimir PDF"
+                                    >
+                                      <Printer size={18} />
+                                    </button>
+                                    <button 
+                                      onClick={() => {
+                                        setEditingOutputId(output.id);
+                                        setOutputForm({
+                                          type: output.type,
+                                          client_name: output.client_name,
+                                          client_contact: output.client_contact,
+                                          delivery_date: output.delivery_date,
+                                          assembly_date: output.assembly_date,
+                                          collection_date: output.collection_date,
+                                          with_assembly: output.with_assembly,
+                                          location_name: output.location_name,
+                                          space_at_location: output.space_at_location,
+                                          delivery_employee: output.delivery_employee,
+                                          collection_employee: output.collection_employee,
+                                          items: [...(output.items || [])]
+                                        });
+                                        setShowOutputForm(true);
+                                        setView('outputs');
+                                        setViewSource('calendar');
+                                      }}
+                                      className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-all"
+                                      title="Editar"
+                                    >
+                                      <Edit size={18} />
+                                    </button>
+                                    <button 
+                                      onClick={() => handleDeleteOutput(output.id)}
+                                      className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                                      title="Eliminar"
+                                    >
+                                      <Trash2 size={18} />
+                                    </button>
+                                    <button 
+                                      onClick={() => setExpandedAtivas(prev => ({ ...prev, [output.id]: !isExpanded }))}
+                                      className="p-2 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-xl transition-all"
+                                      title={isExpanded ? "Ocultar Artigos" : "Ver Artigos"}
+                                    >
+                                      {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                                  <div className="space-y-3">
+                                    <div>
+                                      <p className="font-bold text-slate-800">{output.client_name}</p>
+                                      <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                                        <Phone size={12} />
+                                        {output.client_contact}
+                                      </p>
+                                    </div>
+                                    <div>
+                                      <p className="text-sm text-slate-700 font-medium flex items-center gap-1">
+                                        <MapPin size={14} className="text-slate-400" />
+                                        {output.location_name}
+                                      </p>
+                                      {output.space_at_location && (
+                                        <p className="text-xs text-slate-500 mt-0.5 ml-4.5 italic">{output.space_at_location}</p>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                    <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                                      <div className="text-center">
+                                        <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem vai entregar</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}</p>
+                                        <p className="text-[9px] text-slate-500 mb-1">{output.delivery_date ? new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <input 
+                                          type="text"
+                                          list="employees-list"
+                                          placeholder="Funcionário..."
+                                          className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
+                                          value={output.delivery_employee || ''}
+                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                        />
+                                      </div>
+                                      <div className="text-center border-x border-slate-200">
+                                        <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Montagem</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{output.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}</p>
+                                        <p className="text-[9px] text-slate-500">{output.assembly_date ? new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                      </div>
+                                      <div className="text-center">
+                                        <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem fez recolha</p>
+                                        <p className="text-[10px] font-bold text-emerald-600">{output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}</p>
+                                        <p className="text-[9px] text-emerald-500 mb-1">{output.collection_date ? new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <input 
+                                          type="text"
+                                          list="employees-list"
+                                          placeholder="Funcionário..."
+                                          className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
+                                          value={output.collection_employee || ''}
+                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                        />
+                                      </div>
+                                    <div className="col-span-3 text-right pt-1 border-t border-slate-200 mt-1">
+                                      <p className="text-[9px] font-bold text-emerald-600 uppercase tracking-wider">
+                                        Artigos Pendentes: {output.items?.filter(item => item.quantity_out > item.quantity_in).length}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Articles List (Collapsible) */}
+                              <AnimatePresence>
+                                {isExpanded && (
+                                  <motion.div 
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: 'auto', opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    className="border-t border-slate-100 bg-slate-50/50"
+                                  >
+                                    <div className="p-4 space-y-2">
+                                      {output.items?.filter(item => item.quantity_out > item.quantity_in).map(item => (
+                                        <div key={`item-act-${output.id}-${item.article_id}`} className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between shadow-sm">
+                                          <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 bg-emerald-50 rounded-lg flex items-center justify-center text-emerald-500 border border-emerald-100">
+                                              <Package size={16} />
+                                            </div>
+                                            <div>
+                                              <p className="text-xs font-bold text-slate-800">{item.article_description}</p>
+                                              <p className="text-[10px] text-slate-500">{item.article_code}</p>
+                                            </div>
+                                          </div>
+                                          <div className="flex gap-4">
+                                            <div className="text-center">
+                                              <p className="text-sm font-black text-slate-400">{item.quantity_out}</p>
+                                              <p className="text-[8px] text-slate-400 font-bold uppercase">Entregue</p>
+                                            </div>
+                                            <div className="text-center">
+                                              <p className="text-sm font-black text-emerald-600">{item.quantity_in}</p>
+                                              <p className="text-[8px] text-emerald-400 font-bold uppercase">Recolhido</p>
+                                            </div>
+                                            <div className="text-center border-l border-slate-100 pl-4">
+                                              <p className="text-sm font-black text-red-500">{item.quantity_out - item.quantity_in}</p>
+                                              <p className="text-[8px] text-red-400 font-bold uppercase">Falta</p>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          );
+                        });
+                      })()}
+                    </section>
+                  )}
+
+                  {/* Recolhas Efetuadas Section */}
+                  {(calendarFilter === 'ALL' || calendarFilter === 'EFETUADAS') && (
+                    <section className="space-y-4">
+                      <div className="flex items-center justify-between px-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                          <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Recolhas Efetuadas</h3>
+                        </div>
+                        <button 
+                          onClick={() => handlePrintCategoryReport(calendarDate, 'EFETUADAS')}
+                          className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all"
+                          title="Relatório de Recolhas Efetuadas"
+                        >
+                          <FileText size={16} />
+                        </button>
+                        <button 
+                          onClick={() => handlePrintCategoryReport(calendarDate, 'EFETUADAS')}
+                          className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all"
+                          title="Relatório de Recolhas Efetuadas"
+                        >
+                          <FileText size={16} />
+                        </button>
+                      </div>
+                      {(() => {
+                        const dayMovementsList = movements.filter(m => 
+                          m.type === 'IN' && 
+                          m.date.split('T')[0] === calendarDate &&
+                          (m.observations?.includes('Recolha') || m.observations?.includes('Retorno'))
+                        );
+                        
+                        if (dayMovementsList.length === 0) return <p className="text-sm text-slate-400 italic px-2">Nenhuma recolha efetuada neste dia.</p>;
+
+                        // Group movements by Output ID
+                        const groupedMovements = dayMovementsList.reduce((acc, movement) => {
+                          const outputIdMatch = movement.observations?.match(/#(\d+)/);
+                          const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : -1;
+                          if (!acc[outputId]) acc[outputId] = [];
+                          acc[outputId].push(movement);
+                          return acc;
+                        }, {} as Record<number, Movement[]>);
+
+                        return Object.entries(groupedMovements).map(([outputIdStr, movementsInGroup]) => {
+                          const groupMovements = movementsInGroup as Movement[];
+                          const outputId = parseInt(outputIdStr);
+                          const output = outputId !== -1 ? outputs.find(o => o.id === outputId) : null;
+                          const isExpanded = expandedRecolhas[outputId] || false;
+                          
+                          return (
+                            <div key={`cal-group-${outputId}`} className="bg-white rounded-3xl border border-blue-100 shadow-sm hover:shadow-md transition-all border-l-4 border-l-blue-500 overflow-hidden">
+                              {/* Group Header */}
+                              <div className="p-6">
+                                <div className="flex justify-between items-start mb-4">
+                                  <div className="flex flex-wrap gap-2">
+                                    {output ? (
+                                      <>
+                                        <span className="text-[10px] font-bold text-blue-500 uppercase bg-blue-50 px-2 py-1 rounded-lg">Entrega #{output.id}</span>
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase bg-slate-100 px-2 py-1 rounded-lg">{output.type}</span>
+                                      </>
+                                    ) : (
+                                      <span className="text-[10px] font-bold text-slate-500 uppercase bg-slate-100 px-2 py-1 rounded-lg">Recolha Avulsa</span>
+                                    )}
+                                    <span className="text-[10px] font-bold text-slate-500 uppercase bg-slate-100 px-2 py-1 rounded-lg">{groupMovements.length} Movimentos</span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    {output && (
+                                      <>
+                                        <button 
+                                          onClick={() => handlePrintOutput(output)}
+                                          className="p-2 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 rounded-xl transition-all"
+                                          title="Imprimir PDF Entrega"
+                                        >
+                                          <Printer size={18} />
+                                        </button>
+                                        <button 
+                                          onClick={() => {
+                                            setEditingOutputId(output.id);
+                                            setOutputForm({
+                                              type: output.type,
+                                              client_name: output.client_name,
+                                              client_contact: output.client_contact,
+                                              delivery_date: output.delivery_date,
+                                              assembly_date: output.assembly_date,
+                                              collection_date: output.collection_date,
+                                              with_assembly: output.with_assembly,
+                                              location_name: output.location_name,
+                                              space_at_location: output.space_at_location,
+                                              delivery_employee: output.delivery_employee,
+                                              collection_employee: output.collection_employee,
+                                              items: [...(output.items || [])]
+                                            });
+                                            setShowOutputForm(true);
+                                            setView('outputs');
+                                            setViewSource('calendar');
+                                          }}
+                                          className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-all"
+                                          title="Editar"
+                                        >
+                                          <Edit size={18} />
+                                        </button>
+                                        <button 
+                                          onClick={() => handleDeleteOutput(output.id)}
+                                          className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                                          title="Eliminar"
+                                        >
+                                          <Trash2 size={18} />
+                                        </button>
+                                      </>
+                                    )}
+                                    <button 
+                                      onClick={() => setExpandedRecolhas(prev => ({ ...prev, [outputId]: !isExpanded }))}
+                                      className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-all"
+                                      title={isExpanded ? "Ocultar Artigos" : "Ver Artigos"}
+                                    >
+                                      {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {output ? (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="space-y-3">
+                                      <div>
+                                        <p className="font-bold text-slate-800">{output.client_name}</p>
+                                        <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                                          <Phone size={12} />
+                                          {output.client_contact}
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <p className="text-sm text-slate-700 font-medium flex items-center gap-1">
+                                          <MapPin size={14} className="text-slate-400" />
+                                          {output.location_name}
+                                        </p>
+                                        {output.space_at_location && (
+                                          <p className="text-xs text-slate-500 mt-0.5 ml-4.5 italic">{output.space_at_location}</p>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                                      <div className="text-center">
+                                        <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem vai entregar</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}</p>
+                                        <p className="text-[9px] text-slate-500 mb-1">{output.delivery_date ? new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <input 
+                                          type="text"
+                                          list="employees-list"
+                                          placeholder="Funcionário..."
+                                          className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
+                                          value={output.delivery_employee || ''}
+                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                        />
+                                      </div>
+                                      <div className="text-center border-x border-slate-200">
+                                        <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Montagem</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{output.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}</p>
+                                        <p className="text-[9px] text-slate-500">{output.assembly_date ? new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                      </div>
+                                      <div className="text-center">
+                                        <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem fez recolha</p>
+                                        <p className="text-[10px] font-bold text-emerald-600">{output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}</p>
+                                        <p className="text-[9px] text-emerald-500 mb-1">{output.collection_date ? new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <input 
+                                          type="text"
+                                          list="employees-list"
+                                          placeholder="Funcionário..."
+                                          className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
+                                          value={output.collection_employee || ''}
+                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                        />
+                                      </div>
+                                      <div className="col-span-3 text-right pt-1 border-t border-slate-200 mt-1">
+                                        <p className="text-[9px] font-bold text-emerald-600 uppercase tracking-wider">
+                                          Artigos Pendentes: {output.items?.filter(item => item.quantity_out > item.quantity_in).length}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <p className="text-xs text-slate-400 italic">Contexto da entrega não encontrado.</p>
+                                )}
+                                
+                                {output && (
+                                  <div className="hidden">
+                                    {/* Hidden as requested, moved to grid above */}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Articles List (Collapsible) */}
+                              <AnimatePresence>
+                                {isExpanded && (
+                                  <motion.div 
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: 'auto', opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    className="border-t border-slate-100 bg-slate-50/50"
+                                  >
+                                    <div className="p-4 space-y-3">
+                                      {groupMovements.map(movement => (
+                                        <div key={`mov-item-${movement.id}`} className="bg-white p-3 rounded-xl border border-slate-200 flex items-center justify-between shadow-sm">
+                                          <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-500 border border-blue-100">
+                                              <Package size={16} />
+                                            </div>
+                                            <div>
+                                              <p className="text-xs font-bold text-slate-800">{movement.article_description}</p>
+                                              <p className="text-[10px] text-slate-500">{movement.article_code}</p>
+                                            </div>
+                                          </div>
+                                          <div className="flex items-center gap-4">
+                                            <div className="flex gap-4">
+                                              {(() => {
+                                                const item = output?.items?.find(i => i.article_id === movement.article_id);
+                                                if (!item) return (
+                                                  <div className="text-right">
+                                                    <p className="text-lg font-black text-blue-600">{movement.quantity}</p>
+                                                    <p className="text-[8px] text-blue-400 font-bold uppercase">Unidades</p>
+                                                  </div>
+                                                );
+                                                return (
+                                                  <>
+                                                    <div className="text-center">
+                                                      <p className="text-sm font-black text-slate-400">{item.quantity_out}</p>
+                                                      <p className="text-[8px] text-slate-400 font-bold uppercase">Entregue</p>
+                                                    </div>
+                                                    <div className="text-center">
+                                                      <p className="text-sm font-black text-emerald-600">{item.quantity_in}</p>
+                                                      <p className="text-[8px] text-emerald-400 font-bold uppercase">Recolhido</p>
+                                                    </div>
+                                                    <div className="text-center border-l border-slate-100 pl-4">
+                                                      <p className="text-sm font-black text-red-500">{item.quantity_out - item.quantity_in}</p>
+                                                      <p className="text-[8px] text-red-400 font-bold uppercase">Falta</p>
+                                                    </div>
+                                                    <div className="text-center border-l border-slate-100 pl-4 bg-blue-50/50 px-2 rounded-lg">
+                                                      <p className="text-sm font-black text-blue-600">{movement.quantity}</p>
+                                                      <p className="text-[8px] text-blue-400 font-bold uppercase">Nesta Recolha</p>
+                                                    </div>
+                                                  </>
+                                                );
+                                              })()}
+                                            </div>
+                                            <div className="flex gap-1">
+                                              <button 
+                                                onClick={() => {
+                                                  const outputIdMatch = movement.observations?.match(/#(\d+)/);
+                                                  const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
+                                                  const output = outputId ? outputs.find(o => o.id === outputId) : null;
+                                                  setReturnEmployee(output?.collection_employee || '');
+                                                  setEditingMovementId(movement.id);
+                                                  setEditingMovementData({
+                                                    quantity: movement.quantity,
+                                                    observations: movement.observations || ''
+                                                  });
+                                                  setShowInputForm(true);
+                                                  setView('inputs');
+                                                  setViewSource('calendar');
+                                                }}
+                                                className="p-1.5 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all"
+                                              >
+                                                <Edit size={14} />
+                                              </button>
+                                              <button 
+                                                onClick={() => handleDeleteMovement(movement.id)}
+                                                className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                                              >
+                                                <Trash2 size={14} />
+                                              </button>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          );
+                        });
+                      })()}
+                  </section>
+                )}
+              </div>
+            )}
+          </motion.div>
+        )}
+
+          {view === 'position' && (
+            <motion.div
+              key="position"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="flex flex-col h-full space-y-6"
+            >
+              <div className="flex items-center justify-between shrink-0">
+                <h2 className="text-2xl font-bold text-slate-800">Posição de Stock</h2>
+                <button 
+                  onClick={() => setView('menu')}
+                  className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="shrink-0">
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                     <input 
-                      type="date" 
-                      className="w-full px-0 py-0 text-xl font-bold text-slate-800 bg-transparent border-none outline-none focus:ring-0 cursor-pointer"
-                      value={calendarDate}
-                      onChange={e => setCalendarDate(e.target.value)}
+                      type="text" 
+                      placeholder="Pesquisar artigo..."
+                      className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 bg-white focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm"
+                      value={positionSearchQuery}
+                      onChange={e => {
+                        setPositionSearchQuery(e.target.value);
+                        const exactMatch = articles.find(a => a.code.toLowerCase() === e.target.value.toLowerCase());
+                        if (exactMatch) {
+                          setPositionArticleId(exactMatch.id.toString());
+                          setPositionSearchQuery(exactMatch.description);
+                        }
+                      }}
                     />
+                    {positionSearchQuery && !positionArticleId && (
+                      <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border border-slate-100 shadow-2xl z-50 max-h-60 overflow-y-auto">
+                        {articles
+                          .filter(a => 
+                            a.code.toLowerCase().includes(positionSearchQuery.toLowerCase()) || 
+                            a.description.toLowerCase().includes(positionSearchQuery.toLowerCase())
+                          )
+                          .map(art => (
+                            <button
+                              key={art.id}
+                              onClick={() => {
+                                setPositionArticleId(art.id.toString());
+                                setPositionSearchQuery(art.description);
+                              }}
+                              className="w-full p-4 text-left hover:bg-slate-50 border-b border-slate-50 last:border-none flex items-center gap-3"
+                            >
+                              <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 overflow-hidden">
+                                {art.photo ? <img src={art.photo} className="w-full h-full object-cover" /> : <Package size={20} />}
+                              </div>
+                              <div>
+                                <p className="font-bold text-slate-800 text-sm">{art.description}</p>
+                                <p className="text-xs text-slate-400 font-mono">{art.code}</p>
+                              </div>
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                    {positionArticleId && (
+                      <button 
+                        onClick={() => {
+                          setPositionArticleId('');
+                          setPositionSearchQuery('');
+                        }}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      >
+                        <X size={18} />
+                      </button>
+                    )}
                   </div>
+                  <button 
+                    onClick={() => setShowArticleSearchModal(true)}
+                    className="p-3 bg-white border border-slate-200 rounded-2xl text-slate-400 hover:text-indigo-600 hover:border-indigo-600 transition-all shadow-sm"
+                    title="Pesquisa Avançada"
+                  >
+                    <Search size={20} />
+                  </button>
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto pr-2 space-y-8 custom-scrollbar pb-20">
-                {/* Entregas Section */}
-                <section className="space-y-4">
-                  <div className="flex items-center gap-2 px-2">
-                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                    <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Entregas do Dia</h3>
-                  </div>
+              {positionArticleId && (
+                <div className="flex-1 flex flex-col min-h-0 space-y-6">
                   {(() => {
-                    const dayOutputs = outputs.filter(o => o.delivery_date?.split('T')[0] === calendarDate);
-                    if (dayOutputs.length === 0) return <p className="text-sm text-slate-400 italic px-2">Nenhuma entrega agendada para este dia.</p>;
-                    return dayOutputs.map(output => (
-                      <div key={`cal-out-${output.id}`} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all">
-                        <div className="flex justify-between items-start mb-2">
-                          <div>
-                            <span className="text-[10px] font-bold text-red-500 uppercase bg-red-50 px-2 py-0.5 rounded">#{output.id}</span>
-                            <h4 className="font-bold text-slate-800 mt-1">{output.client_name}</h4>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-xs font-bold text-slate-600">{new Date(output.delivery_date!).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
-                            <p className="text-[10px] text-slate-400 uppercase font-medium">{output.type}</p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-slate-500 flex items-center gap-1">
-                          <MapPin size={12} />
-                          {output.location_name}
-                        </p>
-                      </div>
-                    ));
-                  })()}
-                </section>
+                    const article = articles.find(a => a.id === parseInt(positionArticleId));
+                    if (!article) return null;
 
-                {/* Recolhas Ativas Section */}
-                <section className="space-y-4">
-                  <div className="flex items-center gap-2 px-2">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                    <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Recolhas Ativas (Agendadas)</h3>
-                  </div>
-                  {(() => {
-                    const dayActiveRecolhas = outputs.filter(o => 
-                      o.collection_date?.split('T')[0] === calendarDate && 
-                      o.items?.some(item => item.quantity_out > item.quantity_in)
-                    );
-                    if (dayActiveRecolhas.length === 0) return <p className="text-sm text-slate-400 italic px-2">Nenhuma recolha ativa agendada para este dia.</p>;
-                    return dayActiveRecolhas.map(output => (
-                      <div key={`cal-act-${output.id}`} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all border-l-4 border-l-emerald-500">
-                        <div className="flex justify-between items-start mb-2">
-                          <div>
-                            <span className="text-[10px] font-bold text-emerald-500 uppercase bg-emerald-50 px-2 py-0.5 rounded">#{output.id}</span>
-                            <h4 className="font-bold text-slate-800 mt-1">{output.client_name}</h4>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-xs font-bold text-slate-600">{new Date(output.collection_date!).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
-                            <p className="text-[10px] text-slate-400 uppercase font-medium">{output.items?.filter(i => i.quantity_out > i.quantity_in).length} Artigos Pendentes</p>
-                          </div>
-                        </div>
-                        <p className="text-xs text-slate-500 flex items-center gap-1">
-                          <MapPin size={12} />
-                          {output.location_name}
-                        </p>
-                      </div>
-                    ));
-                  })()}
-                </section>
+                    const pendingDeliveries = outputs.reduce((sum, o) => {
+                      const item = o.items?.find(i => i.article_id === article.id);
+                      if (item) {
+                        return sum + (item.quantity_out - item.quantity_in);
+                      }
+                      return sum;
+                    }, 0);
 
-                {/* Recolhas Efetuadas Section */}
-                <section className="space-y-4">
-                  <div className="flex items-center gap-2 px-2">
-                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                    <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest">Recolhas Efetuadas</h3>
-                  </div>
-                  {(() => {
-                    const dayMovements = movements.filter(m => 
-                      m.type === 'IN' && 
-                      m.date.split('T')[0] === calendarDate &&
-                      (m.observations?.includes('Recolha') || m.observations?.includes('Retorno'))
+                    const totalStock = article.available_stock + pendingDeliveries;
+
+                    const articleMovements = outputs
+                      .filter(o => o.items?.some(i => i.article_id === article.id))
+                      .map(o => ({
+                        type: o.type,
+                        client_name: o.client_name,
+                        client_contact: o.client_contact,
+                        location: o.location_name,
+                        space: o.space_at_location,
+                        delivery_date: o.delivery_date,
+                        collection_date: o.collection_date,
+                        quantity: o.items?.find(i => i.article_id === article.id)?.quantity_out || 0,
+                        returned: o.items?.find(i => i.article_id === article.id)?.quantity_in || 0
+                      }))
+                      .filter(m => (m.quantity - m.returned) > 0)
+                      .sort((a, b) => {
+                        const dateA = a.collection_date ? new Date(a.collection_date).getTime() : 0;
+                        const dateB = b.collection_date ? new Date(b.collection_date).getTime() : 0;
+                        return dateA - dateB;
+                      });
+
+                    return (
+                      <>
+                        <div className="grid grid-cols-3 gap-4 shrink-0 bg-slate-50/50 p-2 rounded-[2rem] border border-slate-100 shadow-inner sticky top-0 z-10">
+                          <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm text-center">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Stock Atual</p>
+                            <p className="text-2xl font-black text-slate-800">{article.available_stock}</p>
+                          </div>
+                          <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm text-center">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Entregas Pend.</p>
+                            <p className="text-2xl font-black text-indigo-600">{pendingDeliveries}</p>
+                          </div>
+                          <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm text-center bg-indigo-50/30 border-indigo-100">
+                            <p className="text-[10px] font-bold text-indigo-400 uppercase mb-1">Stock Total</p>
+                            <p className="text-2xl font-black text-indigo-700">{totalStock}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end px-2">
+                          <button 
+                            onClick={() => generateStockReport(article, pendingDeliveries, totalStock, articleMovements)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-white rounded-xl text-[10px] font-bold uppercase hover:bg-slate-900 transition-all shadow-sm"
+                          >
+                            <BarChart3 size={14} />
+                            Dashboard
+                          </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar pb-20">
+                          <StockTimeline article={article} outputs={outputs} timelineRef={timelineRef} />
+                          
+                          <h3 className="text-sm font-bold text-slate-500 uppercase tracking-widest px-2">Movimentos Ativos</h3>
+                          {articleMovements.length === 0 ? (
+                            <p className="text-sm text-slate-400 italic px-2">Nenhum movimento ativo para este artigo.</p>
+                          ) : (
+                            articleMovements.map((m, idx) => (
+                              <div key={idx} className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm space-y-4">
+                                <div className="flex justify-between items-center">
+                                  <div className="flex-1">
+                                    <span className="text-[10px] font-bold text-indigo-500 uppercase bg-indigo-50 px-2 py-1 rounded-lg">{m.type}</span>
+                                    <p className="font-bold text-slate-800 mt-2 text-lg">{m.location}</p>
+                                    {m.space && <p className="text-xs text-slate-500 italic">{m.space}</p>}
+                                    <div className="mt-3">
+                                      <p className="text-xs font-bold text-slate-700 flex items-center gap-2">
+                                        {m.client_name} 
+                                        {m.client_contact && (
+                                          <>
+                                            <span className="text-slate-300 font-normal">|</span>
+                                            <span className="text-slate-400 font-medium flex items-center gap-1">
+                                              <Phone size={10} /> {m.client_contact}
+                                            </span>
+                                          </>
+                                        )}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <div className="bg-slate-50/50 px-3 py-3 rounded-2xl border border-slate-100 text-center w-28 h-16 flex flex-col justify-center">
+                                      <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-1">Entrega</p>
+                                      <p className="text-[9px] font-bold text-slate-600 leading-tight">{formatFullDate(m.delivery_date)}</p>
+                                    </div>
+                                    <div className="bg-slate-50/50 px-3 py-3 rounded-2xl border border-slate-100 text-center w-28 h-16 flex flex-col justify-center">
+                                      <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-1">Recolha</p>
+                                      <p className="text-[9px] font-bold text-indigo-600 leading-tight">{formatFullDate(m.collection_date)}</p>
+                                    </div>
+                                    <div className="bg-slate-50/50 px-3 py-3 rounded-2xl border border-slate-100 text-center w-28 h-16 flex flex-col justify-center">
+                                      <p className="text-2xl font-black text-slate-800 leading-none mb-0.5">{m.quantity - m.returned}</p>
+                                      <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest">Pendente</p>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </>
                     );
-                    if (dayMovements.length === 0) return <p className="text-sm text-slate-400 italic px-2">Nenhuma recolha efetuada neste dia.</p>;
-                    return dayMovements.map(movement => (
-                      <div key={`cal-mov-${movement.id}`} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all border-l-4 border-l-blue-500">
-                        <div className="flex justify-between items-start mb-2">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center text-blue-500">
-                              <Package size={16} />
-                            </div>
-                            <div>
-                              <h4 className="font-bold text-slate-800 text-sm">{movement.article_description}</h4>
-                              <p className="text-[10px] text-slate-400 font-mono">{movement.article_code}</p>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-lg font-black text-blue-600">{movement.quantity}</p>
-                            <p className="text-[10px] text-blue-400 font-bold uppercase">Unidades</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-50">
-                          <p className="text-[10px] text-slate-400 flex items-center gap-1">
-                            <Clock size={10} />
-                            {new Date(movement.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                          </p>
-                          <p className="text-[10px] text-slate-400 flex items-center gap-1">
-                            <UserIcon size={10} />
-                            {movement.user_name}
-                          </p>
-                        </div>
-                      </div>
-                    ));
                   })()}
-                </section>
-              </div>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -1643,6 +3136,7 @@ export default function App() {
                         setSelectedOutputId('');
                         setReturnItems({});
                         setEditingMovementId(null);
+                        setReturnEmployee('');
                       }
                     }}
                     className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium transition-all ${
@@ -1681,12 +3175,48 @@ export default function App() {
                           </button>
                         </div>
                         <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Quem fez a recolha</label>
+                          <input 
+                            type="text" 
+                            list="employees-list"
+                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
+                            value={returnEmployee}
+                            onChange={e => setReturnEmployee(e.target.value)}
+                          />
+                        </div>
+                        <div>
                           <label className="block text-sm font-medium text-slate-700 mb-1">Artigo</label>
                           <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
                             <p className="font-bold text-slate-800">{movements.find(m => m.id === editingMovementId)?.article_description}</p>
                             <p className="text-xs text-slate-500">{movements.find(m => m.id === editingMovementId)?.article_code}</p>
                           </div>
                         </div>
+                        {(() => {
+                          const movement = movements.find(m => m.id === editingMovementId);
+                          const outputIdMatch = movement?.observations?.match(/#(\d+)/);
+                          const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
+                          const output = outputId ? outputs.find(o => o.id === outputId) : null;
+                          const item = output?.items?.find(i => i.article_id === movement?.article_id);
+                          
+                          if (!item) return null;
+                          
+                          return (
+                            <div className="grid grid-cols-3 gap-4 p-4 bg-slate-50 rounded-xl border border-slate-100">
+                              <div className="text-center">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Entregue</p>
+                                <p className="text-lg font-black text-red-500">{item.quantity_out}</p>
+                              </div>
+                              <div className="text-center border-x border-slate-200">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Recolhido</p>
+                                <p className="text-lg font-black text-emerald-500">{item.quantity_in}</p>
+                              </div>
+                              <div className="text-center">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Pendente</p>
+                                <p className="text-lg font-black text-slate-800">{item.quantity_out - item.quantity_in}</p>
+                              </div>
+                            </div>
+                          );
+                        })()}
                         <div>
                           <label className="block text-sm font-medium text-slate-700 mb-1">Quantidade</label>
                           <input 
@@ -1741,6 +3271,16 @@ export default function App() {
 
                         {selectedOutputId && (
                           <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-300">
+                            <div>
+                              <label className="block text-sm font-medium text-slate-700 mb-1">Quem fez a recolha</label>
+                              <input 
+                                type="text" 
+                                list="employees-list"
+                                className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
+                                value={returnEmployee}
+                                onChange={e => setReturnEmployee(e.target.value)}
+                              />
+                            </div>
                             <div className="overflow-x-auto">
                               <table className="w-full">
                                 <thead>
@@ -1878,23 +3418,36 @@ export default function App() {
                         return isActive && matchesSearch && matchesDate;
                       }).map(o => ({ ...o, listType: 'ACTIVE' as const }));
 
-                      const completedMovements = movements.filter(m => {
-                        if (m.type !== 'IN' || !m.observations?.includes('Recolha')) return false;
+                      const completedMovementsGrouped: Record<number, any> = {};
+                      movements.forEach(m => {
+                        if (m.type !== 'IN' || !m.observations?.includes('Recolha')) return;
                         const outputIdMatch = m.observations?.match(/#(\d+)/);
                         const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
-                        const relatedOutput = outputId ? outputs.find(o => o.id === outputId) : null;
+                        if (!outputId) return;
                         
+                        const relatedOutput = outputs.find(o => o.id === outputId);
                         const matchesSearch = (relatedOutput?.client_name.toLowerCase().includes(inputSearch.toLowerCase()) || 
                                              relatedOutput?.location_name?.toLowerCase().includes(inputSearch.toLowerCase()) ||
                                              m.article_description.toLowerCase().includes(inputSearch.toLowerCase()));
                         const matchesDate = !inputStartDate || (m.date && m.date >= inputStartDate);
-                        return matchesSearch && matchesDate;
-                      }).map(m => {
-                        const outputIdMatch = m.observations?.match(/#(\d+)/);
-                        const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
-                        const relatedOutput = outputId ? outputs.find(o => o.id === outputId) : null;
-                        return { ...m, listType: 'COMPLETED' as const, relatedOutput };
+                        
+                        if (matchesSearch && matchesDate) {
+                          if (!completedMovementsGrouped[outputId]) {
+                            completedMovementsGrouped[outputId] = {
+                              id: outputId,
+                              listType: 'COMPLETED',
+                              relatedOutput,
+                              movements: [],
+                              date: m.date
+                            };
+                          }
+                          completedMovementsGrouped[outputId].movements.push(m);
+                          if (m.date > completedMovementsGrouped[outputId].date) {
+                            completedMovementsGrouped[outputId].date = m.date;
+                          }
+                        }
                       });
+                      const completedMovements = Object.values(completedMovementsGrouped);
 
                       let displayList: any[] = [];
                       if (inputStatusFilter === 'ACTIVE') displayList = activeOutputs;
@@ -1949,6 +3502,7 @@ export default function App() {
                                       <button 
                                         onClick={() => {
                                           setSelectedOutputId(output.id.toString());
+                                          setReturnEmployee(output.collection_employee || '');
                                           const initialReturns: Record<number, number> = {};
                                           output.items?.forEach(item => {
                                             initialReturns[item.article_id] = item.quantity_out - item.quantity_in;
@@ -1966,10 +3520,20 @@ export default function App() {
                                   <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-slate-400">
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
-                                      <p className="text-slate-600 font-medium">
-                                        {output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
-                                        {output.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
-                                      </p>
+                                      <div className="flex flex-col gap-2">
+                                        <p className="text-slate-600 font-medium">
+                                          {output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
+                                          {output.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                        </p>
+                                        <input 
+                                          type="text"
+                                          list="employees-list"
+                                          placeholder="Funcionário..."
+                                          className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                          value={output.delivery_employee || ''}
+                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                        />
+                                      </div>
                                     </div>
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
@@ -1980,10 +3544,20 @@ export default function App() {
                                     </div>
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1 text-emerald-500">Recolha</p>
-                                      <p className="text-emerald-600 font-bold">
-                                        {output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}
-                                        {output.collection_date && <span className="block text-[10px] opacity-70">{new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
-                                      </p>
+                                      <div className="flex flex-col gap-2">
+                                        <p className="text-emerald-600 font-bold">
+                                          {output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}
+                                          {output.collection_date && <span className="block text-[10px] opacity-70">{new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                        </p>
+                                        <input 
+                                          type="text"
+                                          list="employees-list"
+                                          placeholder="Funcionário..."
+                                          className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                          value={output.collection_employee || ''}
+                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                        />
+                                      </div>
                                     </div>
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Artigos</p>
@@ -2040,12 +3614,12 @@ export default function App() {
                               </div>
                             );
                            } else {
-                            const movement = item;
-                            const output = movement.relatedOutput;
+                            const group = item;
+                            const output = group.relatedOutput;
                             const isExpanded = expandedOutputs[output?.id || 0];
 
                             return (
-                              <div key={`completed-${movement.id}`} className="bg-white rounded-3xl border border-slate-100 shadow-lg hover:shadow-xl transition-all overflow-hidden border-l-4 border-l-emerald-500">
+                              <div key={`completed-${group.id}`} className="bg-white rounded-3xl border border-slate-100 shadow-lg hover:shadow-xl transition-all overflow-hidden border-l-4 border-l-emerald-500">
                                 <div className="p-6">
                                   <div className="flex justify-between items-start">
                                     <div className="flex-1">
@@ -2069,46 +3643,28 @@ export default function App() {
                                           <MapPin size={14} className="text-slate-400" />
                                           {output?.location_name} {output?.space_at_location && `(${output?.space_at_location})`}
                                         </p>
-                                        {output?.client_contact && (
-                                          <p className="text-sm text-slate-500 flex items-center gap-1">
-                                            <Phone size={14} className="text-slate-400" />
-                                            {output.client_contact}
-                                          </p>
-                                        )}
                                       </div>
                                     </div>
-                                    <div className="flex gap-2">
-                                      <button 
-                                        onClick={() => {
-                                          setEditingMovementId(movement.id);
-                                          setEditingMovementData({
-                                            quantity: movement.quantity,
-                                            observations: movement.observations || ''
-                                          });
-                                          setShowInputForm(true);
-                                        }}
-                                        className="p-2 text-slate-400 hover:text-emerald-500 transition-colors bg-slate-50 rounded-xl"
-                                        title="Editar Recolha"
-                                      >
-                                        <Edit size={18} />
-                                      </button>
-                                      <button 
-                                        onClick={() => handleDeleteMovement(movement.id)}
-                                        className="p-2 text-slate-400 hover:text-red-500 transition-colors bg-slate-50 rounded-xl"
-                                        title="Anular Recolha"
-                                      >
-                                        <Trash2 size={18} />
-                                      </button>
-                                    </div>
                                   </div>
-
                                   <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-slate-400">
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
-                                      <p className="text-slate-600 font-medium">
-                                        {output?.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
-                                        {output?.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
-                                      </p>
+                                      <div className="flex flex-col gap-2">
+                                        <p className="text-slate-600 font-medium">
+                                          {output?.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
+                                          {output?.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                        </p>
+                                        {output && (
+                                          <input 
+                                            type="text"
+                                            list="employees-list"
+                                            placeholder="Funcionário..."
+                                            className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                            value={output.delivery_employee || ''}
+                                            onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                          />
+                                        )}
+                                      </div>
                                     </div>
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
@@ -2118,79 +3674,100 @@ export default function App() {
                                       </p>
                                     </div>
                                     <div>
-                                      <p className="uppercase tracking-wider font-semibold mb-1 text-emerald-500">Recolha</p>
-                                      <p className="text-emerald-600 font-bold">
-                                        {output?.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}
-                                        {output?.collection_date && <span className="block text-[10px] opacity-70">{new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
-                                      </p>
+                                      <p className="uppercase tracking-wider font-semibold mb-1 text-emerald-500">Última Recolha</p>
+                                      <div className="flex flex-col gap-2">
+                                        <p className="text-emerald-600 font-bold">
+                                          {new Date(group.date).toLocaleDateString()}
+                                        </p>
+                                        {output && (
+                                          <input 
+                                            type="text"
+                                            list="employees-list"
+                                            placeholder="Funcionário..."
+                                            className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                            value={output.collection_employee || ''}
+                                            onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                          />
+                                        )}
+                                      </div>
                                     </div>
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Artigos</p>
                                       <p className="text-slate-600 font-medium">{output?.items?.length || 0} Itens</p>
                                       <button 
                                         onClick={() => setExpandedOutputs({...expandedOutputs, [output?.id || 0]: !isExpanded})}
-                                        className="flex items-center gap-1 text-emerald-600 font-bold hover:underline mt-1"
+                                        className="flex items-center gap-1 text-emerald-600 font-bold hover:underline text-xs mt-1"
                                       >
-                                        {isExpanded ? 'Ocultar' : 'Ver'}
-                                        {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                                        {isExpanded ? 'Ocultar Detalhes' : 'Ver Detalhes'}
+                                        {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                                       </button>
                                     </div>
                                   </div>
 
                                   <AnimatePresence>
-                                    {isExpanded && output && (
+                                    {isExpanded && (
                                       <motion.div 
                                         initial={{ height: 0, opacity: 0 }}
                                         animate={{ height: 'auto', opacity: 1 }}
                                         exit={{ height: 0, opacity: 0 }}
-                                        className="mt-6 pt-6 border-t border-slate-50 overflow-hidden"
+                                        className="mt-4 pt-4 border-t border-slate-50 overflow-hidden"
                                       >
-                                        <div className="bg-slate-50 rounded-2xl p-4">
-                                          <p className="text-xs font-bold text-slate-400 uppercase mb-3 tracking-widest">Artigos da Entrega</p>
-                                          <div className="space-y-3">
-                                            {output.items?.map(item => (
-                                              <div key={item.id} className="flex justify-between items-center text-sm">
-                                                <div className="flex-1">
-                                                  <span className="text-slate-700 font-medium block">{item.article_description}</span>
-                                                  <span className="text-[10px] text-slate-400 font-mono">{item.article_code}</span>
-                                                </div>
-                                                <div className="flex items-center gap-4">
-                                                  <div className="text-center">
-                                                    <p className="text-[10px] text-slate-400 uppercase font-bold">Entrega</p>
-                                                    <p className="text-red-500 font-bold">{item.quantity_out}</p>
-                                                  </div>
-                                                  <div className="text-center">
-                                                    <p className="text-[10px] text-slate-400 uppercase font-bold">Recolha</p>
-                                                    <p className="text-emerald-500 font-bold">{item.quantity_in}</p>
-                                                  </div>
-                                                  <div className="text-center bg-white px-3 py-1 rounded-lg border border-slate-100">
-                                                    <p className="text-[10px] text-slate-400 uppercase font-bold">Pendente</p>
-                                                    <p className="text-slate-800 font-extrabold">{item.quantity_out - item.quantity_in}</p>
-                                                  </div>
+                                        <div className="space-y-3">
+                                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Artigos Recolhidos</p>
+                                          {group.movements.map((m: any) => (
+                                            <div key={m.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                                              <div className="flex-1 min-w-0">
+                                                <p className="text-sm font-bold text-slate-800 truncate">{m.article_description}</p>
+                                                <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                                                  <span>{m.article_code}</span>
+                                                  <span>•</span>
+                                                  <span>{new Date(m.date).toLocaleString()}</span>
                                                 </div>
                                               </div>
-                                            ))}
-                                          </div>
+                                              <div className="flex items-center gap-4">
+                                                <div className="text-right">
+                                                  <p className="text-sm font-black text-emerald-600">{m.quantity}</p>
+                                                  <p className="text-[8px] text-slate-400 uppercase font-bold">Recolhido</p>
+                                                </div>
+                                                <div className="flex gap-1">
+                                                  <button 
+                                                    onClick={() => {
+                                                      const outputIdMatch = m.observations?.match(/#(\d+)/);
+                                                      const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
+                                                      const output = outputId ? outputs.find(o => o.id === outputId) : null;
+                                                      setReturnEmployee(output?.collection_employee || '');
+                                                      setEditingMovementId(m.id);
+                                                      setEditingMovementData({
+                                                        quantity: m.quantity,
+                                                        observations: m.observations || ''
+                                                      });
+                                                      setShowInputForm(true);
+                                                    }}
+                                                    className="p-2 text-slate-400 hover:text-indigo-500 transition-colors bg-white rounded-xl border border-slate-100 shadow-sm"
+                                                    title="Editar"
+                                                  >
+                                                    <Edit size={14} />
+                                                  </button>
+                                                  <button 
+                                                    onClick={() => handleDeleteMovement(m.id)}
+                                                    className="p-2 text-slate-400 hover:text-red-500 transition-colors bg-white rounded-xl border border-slate-100 shadow-sm"
+                                                    title="Eliminar"
+                                                  >
+                                                    <Trash2 size={14} />
+                                                  </button>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          ))}
                                         </div>
                                       </motion.div>
                                     )}
                                   </AnimatePresence>
-
-                                  <div className="mt-4 flex items-center justify-between text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                                    <div className="flex items-center gap-1">
-                                      <Clock size={12} />
-                                      {new Date(movement.date).toLocaleDateString()} {new Date(movement.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                    </div>
-                                    <div className="flex items-center gap-1">
-                                      <UserIcon size={12} />
-                                      {movement.user_name}
-                                    </div>
-                                  </div>
                                 </div>
                               </div>
                             );
-                          }
-                        });
+                           }
+                        })
                     })()}
                   </div>
                 </div>
@@ -2350,11 +3927,6 @@ export default function App() {
                                   value={outputForm.location_name || ''}
                                   onChange={e => setOutputForm({...outputForm, location_name: e.target.value})}
                                 />
-                                <datalist id="locations-list">
-                                  {locations.map(loc => (
-                                    <option key={loc.id} value={loc.name} />
-                                  ))}
-                                </datalist>
                               </div>
                               <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-1">Espaço no Local</label>
@@ -2363,6 +3935,19 @@ export default function App() {
                                   className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                                   value={outputForm.space_at_location || ''}
                                   onChange={e => setOutputForm({...outputForm, space_at_location: e.target.value})}
+                                />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-1 gap-6">
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Quem vai fazer entrega</label>
+                                <input 
+                                  type="text" 
+                                  list="employees-list"
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  value={outputForm.delivery_employee || ''}
+                                  onChange={e => setOutputForm({...outputForm, delivery_employee: e.target.value})}
                                 />
                               </div>
                             </div>
@@ -2716,6 +4301,8 @@ export default function App() {
                                         location_name: output.location_name,
                                         space_at_location: output.space_at_location,
                                         observations: output.observations,
+                                        delivery_employee: output.delivery_employee,
+                                        collection_employee: output.collection_employee,
                                         items: output.items
                                       });
                                       setShowOutputForm(true);
@@ -2738,10 +4325,20 @@ export default function App() {
                               <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-slate-400">
                                 <div>
                                   <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
-                                  <p className="text-slate-600 font-medium">
-                                    {output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
-                                    {output.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
-                                  </p>
+                                  <div className="flex flex-col gap-2">
+                                    <p className="text-slate-600 font-medium">
+                                      {output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
+                                      {output.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                    </p>
+                                    <input 
+                                      type="text"
+                                      list="employees-list"
+                                      placeholder="Funcionário..."
+                                      className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                      value={output.delivery_employee || ''}
+                                      onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                    />
+                                  </div>
                                 </div>
                                 <div>
                                   <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
@@ -2752,10 +4349,20 @@ export default function App() {
                                 </div>
                                 <div>
                                   <p className="uppercase tracking-wider font-semibold mb-1">Recolha</p>
-                                  <p className="text-slate-600 font-medium">
-                                    {output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}
-                                    {output.collection_date && <span className="block text-[10px] opacity-70">{new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
-                                  </p>
+                                  <div className="flex flex-col gap-2">
+                                    <p className="text-slate-600 font-medium">
+                                      {output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}
+                                      {output.collection_date && <span className="block text-[10px] opacity-70">{new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                    </p>
+                                    <input 
+                                      type="text"
+                                      list="employees-list"
+                                      placeholder="Funcionário..."
+                                      className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                      value={output.collection_employee || ''}
+                                      onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                    />
+                                  </div>
                                 </div>
                                 <div>
                                   <p className="uppercase tracking-wider font-semibold mb-1">Artigos</p>
@@ -2945,6 +4552,12 @@ export default function App() {
               label="Calendário" 
             />
             <NavButton 
+              active={view === 'position'} 
+              onClick={() => setView('position')} 
+              icon={<MapPin size={20} />} 
+              label="Posição" 
+            />
+            <NavButton 
               active={view === 'history'} 
               onClick={() => setView('history')} 
               icon={<History size={20} />} 
@@ -3051,12 +4664,16 @@ export default function App() {
                       <button
                         key={art.id}
                         onClick={() => {
-                          setSelectedArticleId(art.id.toString());
-                          setArticleSearchQuery(art.description);
+                          if (view === 'position') {
+                            setPositionArticleId(art.id.toString());
+                            setPositionSearchQuery(art.description);
+                          } else {
+                            setSelectedArticleId(art.id.toString());
+                            setArticleSearchQuery(art.description);
+                          }
                           setShowArticleSearchModal(false);
                         }}
-                        disabled={art.available_stock <= 0}
-                        className="w-full flex items-center gap-4 p-4 rounded-2xl border border-slate-100 hover:border-a2r-blue-light hover:bg-blue-50/30 transition-all text-left group disabled:opacity-50 disabled:hover:border-slate-100 disabled:hover:bg-transparent"
+                        className="w-full flex items-center gap-4 p-4 rounded-2xl border border-slate-100 hover:border-a2r-blue-light hover:bg-blue-50/30 transition-all text-left group"
                       >
                         <div className="w-20 h-20 bg-slate-100 rounded-xl flex-shrink-0 flex items-center justify-center text-slate-400 group-hover:bg-white transition-colors overflow-hidden">
                           {art.photo ? (
@@ -3120,84 +4737,6 @@ export default function App() {
 
       {/* Confirmation Modal */}
       <AnimatePresence>
-        {/* PDF Preview Modal */}
-        <AnimatePresence>
-          {pdfPreview && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
-            >
-              <motion.div 
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.95, opacity: 0 }}
-                className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl h-[90vh] flex flex-col overflow-hidden"
-              >
-                <div className="p-6 border-b border-slate-100 flex justify-between items-center shrink-0">
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-800">Pré-visualização da Ordem de Entrega</h3>
-                    <p className="text-sm text-slate-500">#{pdfPreview.output.id} - {pdfPreview.output.client_name}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button 
-                      onClick={() => window.open(pdfPreview.url, '_blank')}
-                      className="p-2 text-slate-500 hover:text-a2r-blue-dark hover:bg-slate-50 rounded-xl transition-all"
-                      title="Abrir em Nova Janela"
-                    >
-                      <ArrowUpRight size={20} />
-                    </button>
-                    <button 
-                      onClick={() => {
-                        const link = document.createElement('a');
-                        link.href = pdfPreview.url;
-                        link.download = `Ordem_Entrega_${pdfPreview.output.id}.pdf`;
-                        link.click();
-                      }}
-                      className="p-2 text-slate-500 hover:text-a2r-blue-dark hover:bg-slate-50 rounded-xl transition-all"
-                      title="Descarregar PDF"
-                    >
-                      <Download size={20} />
-                    </button>
-                    <button 
-                      onClick={() => closePdfPreview()}
-                      className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
-                    >
-                      <X size={24} />
-                    </button>
-                  </div>
-                </div>
-                
-                <div className="flex-1 bg-slate-100 p-4 overflow-hidden relative">
-                  <iframe 
-                    key={pdfPreview.url}
-                    src={pdfPreview.url} 
-                    className="w-full h-full rounded-xl border border-slate-200 shadow-inner bg-white"
-                    title="PDF Preview"
-                  />
-                </div>
-                
-                <div className="p-6 border-t border-slate-100 flex justify-end gap-4 shrink-0">
-                  <button 
-                    onClick={() => closePdfPreview()}
-                    className="px-6 py-2 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50"
-                  >
-                    Fechar
-                  </button>
-                  <a 
-                    href={pdfPreview.url} 
-                    download={`Ordem_Entrega_${pdfPreview.output.id}.pdf`}
-                    className="px-8 py-2 rounded-xl a2r-gradient text-white font-bold shadow-lg shadow-blue-200 hover:opacity-90"
-                  >
-                    Descarregar PDF
-                  </a>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
         {confirmModal && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -3236,6 +4775,16 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+      <datalist id="locations-list">
+        {locations.map(loc => (
+          <option key={loc.id} value={loc.name} />
+        ))}
+      </datalist>
+      <datalist id="employees-list">
+        {employees.map(emp => (
+          <option key={emp.id} value={emp.name} />
+        ))}
+      </datalist>
     </div>
   );
 }

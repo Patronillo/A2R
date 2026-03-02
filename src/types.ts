@@ -40,6 +40,11 @@ export interface Location {
   name: string;
 }
 
+export interface Employee {
+  id: number;
+  name: string;
+}
+
 export interface Output {
   id: number;
   type: OutputType;
@@ -53,6 +58,8 @@ export interface Output {
   location_name?: string;
   space_at_location: string;
   observations: string;
+  delivery_employee: string;
+  collection_employee: string;
   user_id: number;
   created_at: string;
   items?: OutputItem[];

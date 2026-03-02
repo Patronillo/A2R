@@ -1,93 +1,124 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
-import Database from "better-sqlite3";
+import { sql } from "@vercel/postgres";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database("a2r.db");
-db.pragma('foreign_keys = ON');
+// Helper to ensure schema exists and is up to date
+async function ensureSchema() {
+  console.log("[DB] Ensuring schema...");
+  try {
+    // Users table
+    await sql`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        photo TEXT,
+        pin TEXT NOT NULL
+      )
+    `;
 
-// Initialize Database with a clean schema
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    photo TEXT,
-    pin TEXT NOT NULL
-  );
+    // Articles table
+    await sql`
+      CREATE TABLE IF NOT EXISTS articles (
+        id SERIAL PRIMARY KEY,
+        code TEXT UNIQUE NOT NULL,
+        description TEXT NOT NULL,
+        initial_stock INTEGER DEFAULT 0,
+        available_stock INTEGER DEFAULT 0,
+        height FLOAT,
+        width FLOAT,
+        length FLOAT,
+        photo TEXT
+      )
+    `;
 
-  CREATE TABLE IF NOT EXISTS articles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    code TEXT UNIQUE NOT NULL,
-    description TEXT NOT NULL,
-    initial_stock INTEGER DEFAULT 0,
-    available_stock INTEGER DEFAULT 0,
-    height REAL,
-    width REAL,
-    length REAL,
-    photo TEXT
-  );
+    // Movements table
+    await sql`
+      CREATE TABLE IF NOT EXISTS movements (
+        id SERIAL PRIMARY KEY,
+        article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type TEXT CHECK(type IN ('IN', 'OUT')) NOT NULL,
+        quantity INTEGER NOT NULL,
+        date TIMESTAMP NOT NULL,
+        observations TEXT,
+        destination TEXT,
+        related_movement_id INTEGER
+      )
+    `;
 
-  CREATE TABLE IF NOT EXISTS movements (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    article_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    type TEXT CHECK(type IN ('IN', 'OUT')) NOT NULL,
-    quantity INTEGER NOT NULL,
-    date TEXT NOT NULL,
-    observations TEXT,
-    destination TEXT,
-    related_movement_id INTEGER,
-    FOREIGN KEY(article_id) REFERENCES articles(id) ON DELETE CASCADE,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
+    // Reset codes table
+    await sql`
+      CREATE TABLE IF NOT EXISTS reset_codes (
+        id SERIAL PRIMARY KEY,
+        email TEXT NOT NULL,
+        code TEXT NOT NULL,
+        expires_at TIMESTAMP NOT NULL
+      )
+    `;
 
-  CREATE TABLE IF NOT EXISTS reset_codes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL,
-    code TEXT NOT NULL,
-    expires_at DATETIME NOT NULL
-  );
+    // Locations table
+    await sql`
+      CREATE TABLE IF NOT EXISTS locations (
+        id SERIAL PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL
+      )
+    `;
 
-  CREATE TABLE IF NOT EXISTS locations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL
-  );
+    // Employees table
+    await sql`
+      CREATE TABLE IF NOT EXISTS employees (
+        id SERIAL PRIMARY KEY,
+        name TEXT UNIQUE NOT NULL
+      )
+    `;
 
-  CREATE TABLE IF NOT EXISTS outputs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    type TEXT NOT NULL,
-    client_name TEXT NOT NULL,
-    client_contact TEXT,
-    delivery_date TEXT,
-    assembly_date TEXT,
-    collection_date TEXT,
-    with_assembly INTEGER DEFAULT 0,
-    location_id INTEGER NOT NULL,
-    space_at_location TEXT,
-    observations TEXT,
-    user_id INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY(location_id) REFERENCES locations(id),
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
+    // Outputs table
+    await sql`
+      CREATE TABLE IF NOT EXISTS outputs (
+        id SERIAL PRIMARY KEY,
+        type TEXT NOT NULL,
+        client_name TEXT NOT NULL,
+        client_contact TEXT,
+        delivery_date TIMESTAMP,
+        assembly_date TIMESTAMP,
+        collection_date TIMESTAMP,
+        with_assembly BOOLEAN DEFAULT FALSE,
+        location_id INTEGER NOT NULL REFERENCES locations(id),
+        space_at_location TEXT,
+        observations TEXT,
+        delivery_employee TEXT,
+        collection_employee TEXT,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
 
-  CREATE TABLE IF NOT EXISTS output_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    output_id INTEGER NOT NULL,
-    article_id INTEGER NOT NULL,
-    quantity_out INTEGER NOT NULL,
-    quantity_in INTEGER DEFAULT 0,
-    FOREIGN KEY(output_id) REFERENCES outputs(id) ON DELETE CASCADE,
-    FOREIGN KEY(article_id) REFERENCES articles(id)
-  );
-`);
+    // Output items table
+    await sql`
+      CREATE TABLE IF NOT EXISTS output_items (
+        id SERIAL PRIMARY KEY,
+        output_id INTEGER NOT NULL REFERENCES outputs(id) ON DELETE CASCADE,
+        article_id INTEGER NOT NULL REFERENCES articles(id),
+        quantity_out INTEGER NOT NULL,
+        quantity_in INTEGER DEFAULT 0
+      )
+    `;
+
+    console.log("[DB] Schema ensured.");
+  } catch (error) {
+    console.error("[DB] Error ensuring schema:", error);
+  }
+}
 
 async function startServer() {
+  await ensureSchema();
+
   const app = express();
   const PORT = 3000;
 
@@ -104,124 +135,154 @@ async function startServer() {
   });
 
   // Auth Endpoints
-  app.post("/api/login", (req, res) => {
+  app.post("/api/login", async (req, res) => {
     const { pin } = req.body;
-    const user = db.prepare("SELECT id, name, email, photo FROM users WHERE pin = ?").get(pin);
-    if (user) {
-      res.json(user);
-    } else {
-      res.status(401).json({ error: "PIN inválido" });
+    try {
+      const { rows } = await sql`SELECT id, name, email, photo FROM users WHERE pin = ${pin}`;
+      if (rows.length > 0) {
+        res.json(rows[0]);
+      } else {
+        res.status(401).json({ error: "PIN inválido" });
+      }
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
   });
 
-  app.post("/api/users", (req, res) => {
+  app.post("/api/users", async (req, res) => {
     const { name, email, photo, pin } = req.body;
     try {
-      const info = db.prepare("INSERT INTO users (name, email, photo, pin) VALUES (?, ?, ?, ?)").run(name, email, photo, pin);
-      res.json({ id: info.lastInsertRowid });
+      const { rows } = await sql`
+        INSERT INTO users (name, email, photo, pin) 
+        VALUES (${name}, ${email}, ${photo}, ${pin}) 
+        RETURNING id
+      `;
+      res.json({ id: rows[0].id });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
   });
 
-  app.get("/api/users", (req, res) => {
-    const users = db.prepare("SELECT id, name, email, photo FROM users").all();
-    res.json(users);
+  app.get("/api/users", async (req, res) => {
+    try {
+      const { rows } = await sql`SELECT id, name, email, photo FROM users`;
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // PIN Recovery Endpoints
-  app.post("/api/auth/forgot-pin", (req, res) => {
+  app.post("/api/auth/forgot-pin", async (req, res) => {
     const { email } = req.body;
     console.log(`[RECOVERY] Request for email: ${email}`);
     
-    const userCount = db.prepare("SELECT COUNT(*) as count FROM users").get() as any;
-    console.log(`[RECOVERY] Total users in DB: ${userCount.count}`);
+    try {
+      const { rows: countRows } = await sql`SELECT COUNT(*) as count FROM users`;
+      console.log(`[RECOVERY] Total users in DB: ${countRows[0].count}`);
 
-    const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
-    
-    if (!user) {
-      return res.status(400).json({ error: "Utilizador não encontrado com este email." });
+      const { rows: userRows } = await sql`SELECT * FROM users WHERE email = ${email}`;
+      
+      if (userRows.length === 0) {
+        return res.status(400).json({ error: "Utilizador não encontrado com este email." });
+      }
+
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 15 * 60000).toISOString();
+
+      await sql`DELETE FROM reset_codes WHERE email = ${email}`;
+      await sql`INSERT INTO reset_codes (email, code, expires_at) VALUES (${email}, ${code}, ${expiresAt})`;
+
+      console.log(`[RECOVERY] To: ${email} | Code: ${code}`);
+      res.json({ success: true, message: "Código de recuperação enviado para o seu email." });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
-
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60000).toISOString();
-
-    db.prepare("DELETE FROM reset_codes WHERE email = ?").run(email);
-    db.prepare("INSERT INTO reset_codes (email, code, expires_at) VALUES (?, ?, ?)").run(email, code, expiresAt);
-
-    console.log(`[RECOVERY] To: ${email} | Code: ${code}`);
-    res.json({ success: true, message: "Código de recuperação enviado para o seu email." });
   });
 
-  app.post("/api/auth/verify-code", (req, res) => {
+  app.post("/api/auth/verify-code", async (req, res) => {
     const { email, code } = req.body;
-    const record = db.prepare("SELECT * FROM reset_codes WHERE email = ? AND code = ?").get(email, code) as any;
+    try {
+      const { rows } = await sql`SELECT * FROM reset_codes WHERE email = ${email} AND code = ${code}`;
 
-    if (!record) return res.status(400).json({ error: "Código inválido." });
-    if (new Date(record.expires_at) < new Date()) return res.status(400).json({ error: "Código expirado." });
+      if (rows.length === 0) return res.status(400).json({ error: "Código inválido." });
+      if (new Date(rows[0].expires_at) < new Date()) return res.status(400).json({ error: "Código expirado." });
 
-    res.json({ success: true });
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
-  app.post("/api/auth/reset-pin", (req, res) => {
+  app.post("/api/auth/reset-pin", async (req, res) => {
     const { email, code, newPin } = req.body;
-    const record = db.prepare("SELECT * FROM reset_codes WHERE email = ? AND code = ?").get(email, code) as any;
-    
-    if (!record || new Date(record.expires_at) < new Date()) {
-      return res.status(400).json({ error: "Sessão inválida." });
-    }
+    try {
+      const { rows } = await sql`SELECT * FROM reset_codes WHERE email = ${email} AND code = ${code}`;
+      
+      if (rows.length === 0 || new Date(rows[0].expires_at) < new Date()) {
+        return res.status(400).json({ error: "Sessão inválida." });
+      }
 
-    db.prepare("UPDATE users SET pin = ? WHERE email = ?").run(newPin, email);
-    db.prepare("DELETE FROM reset_codes WHERE email = ?").run(email);
-    res.json({ success: true });
+      await sql`UPDATE users SET pin = ${newPin} WHERE email = ${email}`;
+      await sql`DELETE FROM reset_codes WHERE email = ${email}`;
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Articles Endpoints
-  app.get("/api/articles", (req, res) => {
-    const articles = db.prepare("SELECT * FROM articles ORDER BY description ASC").all();
-    res.json(articles);
+  app.get("/api/articles", async (req, res) => {
+    try {
+      const { rows } = await sql`SELECT * FROM articles ORDER BY description ASC`;
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
-  app.post("/api/articles", (req, res) => {
+  app.post("/api/articles", async (req, res) => {
     const { code, description, initial_stock, height, width, length, photo } = req.body;
     try {
-      const info = db.prepare(`
+      const { rows } = await sql`
         INSERT INTO articles (code, description, initial_stock, available_stock, height, width, length, photo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(code, description, initial_stock, initial_stock, height, width, length, photo);
-      res.json({ id: info.lastInsertRowid });
+        VALUES (${code}, ${description}, ${initial_stock}, ${initial_stock}, ${height}, ${width}, ${length}, ${photo})
+        RETURNING id
+      `;
+      res.json({ id: rows[0].id });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
   });
 
-  app.put("/api/articles/:id", (req, res) => {
+  app.put("/api/articles/:id", async (req, res) => {
     const { id } = req.params;
     const { code, description, initial_stock, height, width, length, photo } = req.body;
     
     try {
-      const article = db.prepare("SELECT * FROM articles WHERE id = ?").get(id) as any;
-      if (!article) return res.status(404).json({ error: "Artigo não encontrado" });
+      const { rows } = await sql`SELECT * FROM articles WHERE id = ${id}`;
+      if (rows.length === 0) return res.status(404).json({ error: "Artigo não encontrado" });
 
+      const article = rows[0];
       const diff = initial_stock - article.initial_stock;
       const newAvailable = article.available_stock + diff;
 
-      db.prepare(`
+      await sql`
         UPDATE articles 
-        SET code = ?, description = ?, initial_stock = ?, available_stock = ?, height = ?, width = ?, length = ?, photo = ?
-        WHERE id = ?
-      `).run(code, description, initial_stock, newAvailable, height, width, length, photo, id);
+        SET code = ${code}, description = ${description}, initial_stock = ${initial_stock}, available_stock = ${newAvailable}, height = ${height}, width = ${width}, length = ${length}, photo = ${photo}
+        WHERE id = ${id}
+      `;
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
   });
 
-  app.delete("/api/articles/:id", (req, res) => {
+  app.delete("/api/articles/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      const result = db.prepare("DELETE FROM articles WHERE id = ?").run(id);
-      if (result.changes > 0) {
+      const { rowCount } = await sql`DELETE FROM articles WHERE id = ${id}`;
+      if (rowCount > 0) {
         res.json({ success: true });
       } else {
         res.status(404).json({ error: "Artigo não encontrado" });
@@ -232,17 +293,32 @@ async function startServer() {
   });
 
   // Locations Endpoints
-  app.get("/api/locations", (req, res) => {
-    const locations = db.prepare("SELECT * FROM locations ORDER BY name ASC").all();
-    res.json(locations);
+  app.get("/api/locations", async (req, res) => {
+    try {
+      const { rows } = await sql`SELECT * FROM locations ORDER BY name ASC`;
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Employees Endpoints
+  app.get("/api/employees", async (req, res) => {
+    try {
+      const { rows } = await sql`SELECT * FROM employees ORDER BY name ASC`;
+      res.json(rows);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Outputs Endpoints
-  app.post("/api/outputs", (req, res) => {
+  app.post("/api/outputs", async (req, res) => {
     const { 
       type, client_name, client_contact, delivery_date, 
       assembly_date, collection_date, with_assembly, 
       location_name, space_at_location, observations, 
+      delivery_employee, collection_employee,
       user_id, items 
     } = req.body;
 
@@ -251,66 +327,65 @@ async function startServer() {
     }
 
     try {
-      const transaction = db.transaction(() => {
-        // 1. Handle Location
-        let location = db.prepare("SELECT id FROM locations WHERE name = ?").get(location_name) as any;
-        if (!location) {
-          const info = db.prepare("INSERT INTO locations (name) VALUES (?)").run(location_name);
-          location = { id: info.lastInsertRowid };
-        }
+      // 1. Handle Location
+      let locationId;
+      const { rows: locRows } = await sql`SELECT id FROM locations WHERE name = ${location_name}`;
+      if (locRows.length === 0) {
+        const { rows: newLocRows } = await sql`INSERT INTO locations (name) VALUES (${location_name}) RETURNING id`;
+        locationId = newLocRows[0].id;
+      } else {
+        locationId = locRows[0].id;
+      }
 
-        // 2. Insert Output
-        const createdAt = new Date().toISOString();
-        const outputInfo = db.prepare(`
-          INSERT INTO outputs (
-            type, client_name, client_contact, delivery_date, 
-            assembly_date, collection_date, with_assembly, 
-            location_id, space_at_location, observations, 
-            user_id, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
+      // 2. Handle Employees
+      if (delivery_employee) {
+        const { rows: empRows } = await sql`SELECT id FROM employees WHERE name = ${delivery_employee}`;
+        if (empRows.length === 0) {
+          await sql`INSERT INTO employees (name) VALUES (${delivery_employee})`;
+        }
+      }
+      if (collection_employee) {
+        const { rows: empRows } = await sql`SELECT id FROM employees WHERE name = ${collection_employee}`;
+        if (empRows.length === 0) {
+          await sql`INSERT INTO employees (name) VALUES (${collection_employee})`;
+        }
+      }
+
+      // 3. Insert Output
+      const createdAt = new Date().toISOString();
+      const { rows: outputRows } = await sql`
+        INSERT INTO outputs (
           type, client_name, client_contact, delivery_date, 
-          assembly_date, collection_date, with_assembly ? 1 : 0, 
-          location.id, space_at_location, observations, 
-          user_id, createdAt
-        );
+          assembly_date, collection_date, with_assembly, 
+          location_id, space_at_location, observations, 
+          delivery_employee, collection_employee,
+          user_id, created_at
+        ) VALUES (
+          ${type}, ${client_name}, ${client_contact}, ${delivery_date}, 
+          ${assembly_date}, ${collection_date}, ${with_assembly}, 
+          ${locationId}, ${space_at_location}, ${observations}, 
+          ${delivery_employee || null}, ${collection_employee || null},
+          ${user_id}, ${createdAt}
+        ) RETURNING id
+      `;
 
-        const outputId = outputInfo.lastInsertRowid;
+      const outputId = outputRows[0].id;
 
-        // 3. Process Items
-        for (const item of items) {
-          const article = db.prepare("SELECT available_stock, description FROM articles WHERE id = ?").get(item.article_id) as any;
-          
-          if (!article) {
-            throw new Error(`Artigo com ID ${item.article_id} não encontrado.`);
-          }
+      // 4. Process Items
+      for (const item of items) {
+        // Update Article Stock
+        await sql`UPDATE articles SET available_stock = available_stock - ${item.quantity_out} WHERE id = ${item.article_id}`;
 
-          if (article.available_stock < item.quantity_out) {
-            throw new Error(`Stock insuficiente para o artigo: ${article.description}. Disponível: ${article.available_stock}, Solicitado: ${item.quantity_out}`);
-          }
+        // Insert Output Item
+        await sql`INSERT INTO output_items (output_id, article_id, quantity_out) VALUES (${outputId}, ${item.article_id}, ${item.quantity_out})`;
 
-          // Update Article Stock
-          db.prepare("UPDATE articles SET available_stock = available_stock - ? WHERE id = ?")
-            .run(item.quantity_out, item.article_id);
+        // Insert Movement (for history)
+        await sql`
+          INSERT INTO movements (article_id, user_id, type, quantity, date, observations, destination)
+          VALUES (${item.article_id}, ${user_id}, 'OUT', ${item.quantity_out}, ${createdAt}, ${`Entrega #${outputId}: ${type}`}, ${location_name})
+        `;
+      }
 
-          // Insert Output Item
-          db.prepare("INSERT INTO output_items (output_id, article_id, quantity_out) VALUES (?, ?, ?)")
-            .run(outputId, item.article_id, item.quantity_out);
-
-          // Insert Movement (for history)
-          db.prepare(`
-            INSERT INTO movements (article_id, user_id, type, quantity, date, observations, destination)
-            VALUES (?, ?, 'OUT', ?, ?, ?, ?)
-          `).run(
-            item.article_id, user_id, item.quantity_out, createdAt, 
-            `Entrega #${outputId}: ${type}`, location_name
-          );
-        }
-
-        return outputId;
-      });
-
-      const outputId = transaction();
       res.json({ id: outputId });
     } catch (e: any) {
       console.error("[OUTPUT ERROR]", e);
@@ -318,199 +393,213 @@ async function startServer() {
     }
   });
 
-  app.get("/api/outputs", (req, res) => {
-    const outputs = db.prepare(`
-      SELECT o.*, l.name as location_name, u.name as user_name
-      FROM outputs o
-      JOIN locations l ON o.location_id = l.id
-      JOIN users u ON o.user_id = u.id
-      ORDER BY o.created_at DESC
-    `).all();
+  app.get("/api/outputs", async (req, res) => {
+    try {
+      const { rows: outputs } = await sql`
+        SELECT o.*, l.name as location_name, u.name as user_name
+        FROM outputs o
+        JOIN locations l ON o.location_id = l.id
+        JOIN users u ON o.user_id = u.id
+        ORDER BY o.created_at DESC
+      `;
 
-    for (const output of outputs as any[]) {
-      output.items = db.prepare(`
-        SELECT oi.*, a.description as article_description, a.code as article_code
-        FROM output_items oi
-        JOIN articles a ON oi.article_id = a.id
-        WHERE oi.output_id = ?
-      `).all(output.id);
+      for (const output of outputs as any[]) {
+        const { rows: items } = await sql`
+          SELECT oi.*, a.description as article_description, a.code as article_code
+          FROM output_items oi
+          JOIN articles a ON oi.article_id = a.id
+          WHERE oi.output_id = ${output.id}
+        `;
+        output.items = items;
+      }
+
+      res.json(outputs);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
     }
-
-    res.json(outputs);
   });
 
-  app.delete("/api/outputs/:id", (req, res) => {
+  app.delete("/api/outputs/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      const transaction = db.transaction(() => {
-        const items = db.prepare("SELECT * FROM output_items WHERE output_id = ?").all(id) as any[];
-        
-        // Revert stock for each item
-        for (const item of items) {
-          db.prepare("UPDATE articles SET available_stock = available_stock + ? WHERE id = ?")
-            .run(item.quantity_out - item.quantity_in, item.article_id);
-        }
+      const { rows: items } = await sql`SELECT * FROM output_items WHERE output_id = ${id}`;
+      
+      // Revert stock for each item
+      for (const item of items) {
+        await sql`UPDATE articles SET available_stock = available_stock + ${item.quantity_out - item.quantity_in} WHERE id = ${item.article_id}`;
+      }
 
-        // Delete associated movements
-        db.prepare("DELETE FROM movements WHERE observations LIKE ?").run(`Entrega #${id}:%`);
-        db.prepare("DELETE FROM movements WHERE observations LIKE ?").run(`Recolha (Retorno Entrega #${id})%`);
+      // Delete associated movements
+      await sql`DELETE FROM movements WHERE observations LIKE ${`Entrega #${id}:%`}`;
+      await sql`DELETE FROM movements WHERE observations LIKE ${`Recolha (Retorno Entrega #${id})%`}`;
 
-        // Delete output and items (cascade handles items if configured, but let's be explicit if not sure)
-        db.prepare("DELETE FROM output_items WHERE output_id = ?").run(id);
-        db.prepare("DELETE FROM outputs WHERE id = ?").run(id);
+      // Delete output and items
+      await sql`DELETE FROM output_items WHERE output_id = ${id}`;
+      await sql`DELETE FROM outputs WHERE id = ${id}`;
 
-        return true;
-      });
-
-      transaction();
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
   });
 
-  app.put("/api/outputs/:id", (req, res) => {
+  app.put("/api/outputs/:id", async (req, res) => {
     const { id } = req.params;
     const { 
       type, client_name, client_contact, delivery_date, 
       assembly_date, collection_date, with_assembly, 
       location_name, space_at_location, observations,
+      delivery_employee, collection_employee,
       items, user_id
     } = req.body;
 
     try {
-      const transaction = db.transaction(() => {
-        // Handle location
-        let locationId;
-        const existingLocation = db.prepare("SELECT id FROM locations WHERE name = ?").get(location_name) as any;
-        if (existingLocation) {
-          locationId = existingLocation.id;
-        } else {
-          const result = db.prepare("INSERT INTO locations (name) VALUES (?)").run(location_name);
-          locationId = result.lastInsertRowid;
+      // Handle location
+      let locationId;
+      const { rows: locRows } = await sql`SELECT id FROM locations WHERE name = ${location_name}`;
+      if (locRows.length > 0) {
+        locationId = locRows[0].id;
+      } else {
+        const { rows: newLocRows } = await sql`INSERT INTO locations (name) VALUES (${location_name}) RETURNING id`;
+        locationId = newLocRows[0].id;
+      }
+
+      // Handle employees
+      if (delivery_employee) {
+        const { rows: empRows } = await sql`SELECT id FROM employees WHERE name = ${delivery_employee}`;
+        if (empRows.length === 0) {
+          await sql`INSERT INTO employees (name) VALUES (${delivery_employee})`;
         }
+      }
+      if (collection_employee) {
+        const { rows: empRows } = await sql`SELECT id FROM employees WHERE name = ${collection_employee}`;
+        if (empRows.length === 0) {
+          await sql`INSERT INTO employees (name) VALUES (${collection_employee})`;
+        }
+      }
 
-        db.prepare(`
-          UPDATE outputs SET 
-            type = ?, client_name = ?, client_contact = ?, 
-            delivery_date = ?, assembly_date = ?, collection_date = ?, 
-            with_assembly = ?, location_id = ?, space_at_location = ?, 
-            observations = ?
-          WHERE id = ?
-        `).run(
-          type, client_name, client_contact, 
-          delivery_date, assembly_date, collection_date, 
-          with_assembly ? 1 : 0, locationId, space_at_location, 
-          observations, id
-        );
+      await sql`
+        UPDATE outputs SET 
+          type = ${type}, client_name = ${client_name}, client_contact = ${client_contact}, 
+          delivery_date = ${delivery_date}, assembly_date = ${assembly_date}, collection_date = ${collection_date}, 
+          with_assembly = ${with_assembly}, location_id = ${locationId}, space_at_location = ${space_at_location}, 
+          observations = ${observations}, delivery_employee = ${delivery_employee || null}, collection_employee = ${collection_employee || null}
+        WHERE id = ${id}
+      `;
 
-        // Handle items update
-        if (items) {
-          const currentItems = db.prepare("SELECT * FROM output_items WHERE output_id = ?").all(id) as any[];
-          const newItemIds = items.map((i: any) => i.article_id);
+      // Handle items update
+      if (items) {
+        const { rows: currentItems } = await sql`SELECT * FROM output_items WHERE output_id = ${id}`;
+        const newItemIds = items.map((i: any) => i.article_id);
 
-          // 1. Remove items not in the new list
-          for (const currentItem of currentItems) {
-            if (!newItemIds.includes(currentItem.article_id)) {
-              // Revert stock
-              db.prepare("UPDATE articles SET available_stock = available_stock + ? WHERE id = ?")
-                .run(currentItem.quantity_out - currentItem.quantity_in, currentItem.article_id);
-              // Delete item
-              db.prepare("DELETE FROM output_items WHERE id = ?").run(currentItem.id);
-              // Delete associated movement
-              db.prepare("DELETE FROM movements WHERE observations LIKE ? AND article_id = ?")
-                .run(`Entrega #${id}:%`, currentItem.article_id);
-            }
-          }
-
-          // 2. Update or Add items
-          for (const newItem of items) {
-            const currentItem = currentItems.find(i => i.article_id === newItem.article_id);
-            if (currentItem) {
-              // Update existing item
-              if (newItem.quantity_out < currentItem.quantity_in) {
-                throw new Error(`Quantidade de saída para o artigo ${newItem.article_description} não pode ser inferior à quantidade já devolvida (${currentItem.quantity_in}).`);
-              }
-
-              const diff = newItem.quantity_out - currentItem.quantity_out;
-              if (diff !== 0) {
-                if (diff > 0) {
-                  const article = db.prepare("SELECT available_stock FROM articles WHERE id = ?").get(newItem.article_id) as any;
-                  if (article.available_stock < diff) {
-                    throw new Error(`Stock insuficiente para o artigo ${newItem.article_description}. Disponível: ${article.available_stock}`);
-                  }
-                }
-                db.prepare("UPDATE articles SET available_stock = available_stock - ? WHERE id = ?")
-                  .run(diff, newItem.article_id);
-                db.prepare("UPDATE output_items SET quantity_out = ? WHERE id = ?")
-                  .run(newItem.quantity_out, currentItem.id);
-                db.prepare("UPDATE movements SET quantity = ? WHERE observations LIKE ? AND article_id = ?")
-                  .run(newItem.quantity_out, `Entrega #${id}:%`, newItem.article_id);
-              }
-            } else {
-              // Add new item
-              const article = db.prepare("SELECT available_stock FROM articles WHERE id = ?").get(newItem.article_id) as any;
-              if (article.available_stock < newItem.quantity_out) {
-                throw new Error(`Stock insuficiente para o artigo ${newItem.article_description}. Disponível: ${article.available_stock}`);
-              }
-              db.prepare("UPDATE articles SET available_stock = available_stock - ? WHERE id = ?")
-                .run(newItem.quantity_out, newItem.article_id);
-              db.prepare("INSERT INTO output_items (output_id, article_id, quantity_out, quantity_in) VALUES (?, ?, ?, 0)")
-                .run(id, newItem.article_id, newItem.quantity_out);
-              
-              const createdAt = new Date().toISOString();
-              db.prepare(`
-                INSERT INTO movements (article_id, user_id, type, quantity, date, observations)
-                VALUES (?, ?, 'OUT', ?, ?, ?)
-              `).run(newItem.article_id, user_id, newItem.quantity_out, createdAt, `Entrega #${id}: ${client_name}`);
-            }
+        // 1. Remove items not in the new list
+        for (const currentItem of currentItems) {
+          if (!newItemIds.includes(currentItem.article_id)) {
+            // Revert stock
+            await sql`UPDATE articles SET available_stock = available_stock + ${currentItem.quantity_out - currentItem.quantity_in} WHERE id = ${currentItem.article_id}`;
+            // Delete item
+            await sql`DELETE FROM output_items WHERE id = ${currentItem.id}`;
+            // Delete associated movement
+            await sql`DELETE FROM movements WHERE observations LIKE ${`Entrega #${id}:%`} AND article_id = ${currentItem.article_id}`;
           }
         }
 
-        return true;
-      });
+        // 2. Update or Add items
+        for (const newItem of items) {
+          const currentItem = currentItems.find(i => i.article_id === newItem.article_id);
+          if (currentItem) {
+            // Update existing item
+            if (newItem.quantity_out < currentItem.quantity_in) {
+              throw new Error(`Quantidade de saída para o artigo ${newItem.article_description} não pode ser inferior à quantidade já devolvida (${currentItem.quantity_in}).`);
+            }
 
-      transaction();
+            const diff = newItem.quantity_out - currentItem.quantity_out;
+            if (diff !== 0) {
+              await sql`UPDATE articles SET available_stock = available_stock - ${diff} WHERE id = ${newItem.article_id}`;
+              await sql`UPDATE output_items SET quantity_out = ${newItem.quantity_out} WHERE id = ${currentItem.id}`;
+              await sql`UPDATE movements SET quantity = ${newItem.quantity_out} WHERE observations LIKE ${`Entrega #${id}:%`} AND article_id = ${newItem.article_id}`;
+            }
+          } else {
+            // Add new item
+            await sql`UPDATE articles SET available_stock = available_stock - ${newItem.quantity_out} WHERE id = ${newItem.article_id}`;
+            await sql`INSERT INTO output_items (output_id, article_id, quantity_out, quantity_in) VALUES (${id}, ${newItem.article_id}, ${newItem.quantity_out}, 0)`;
+            
+            const createdAt = new Date().toISOString();
+            await sql`
+              INSERT INTO movements (article_id, user_id, type, quantity, date, observations)
+              VALUES (${newItem.article_id}, ${user_id}, 'OUT', ${newItem.quantity_out}, ${createdAt}, ${`Entrega #${id}: ${client_name}`})
+            `;
+          }
+        }
+      }
+
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
   });
 
-  app.post("/api/outputs/:id/return", (req, res) => {
+  app.patch("/api/outputs/:id/status", async (req, res) => {
     const { id } = req.params;
-    const { items, user_id } = req.body; // items is [{ article_id, quantity_in, observations }]
+    const { delivery_employee, collection_employee } = req.body;
+    try {
+      if (delivery_employee !== undefined) {
+        await sql`UPDATE outputs SET delivery_employee = ${delivery_employee} WHERE id = ${id}`;
+        if (delivery_employee) {
+          const { rows: empRows } = await sql`SELECT id FROM employees WHERE name = ${delivery_employee}`;
+          if (empRows.length === 0) {
+            await sql`INSERT INTO employees (name) VALUES (${delivery_employee})`;
+          }
+        }
+      }
+      if (collection_employee !== undefined) {
+        await sql`UPDATE outputs SET collection_employee = ${collection_employee} WHERE id = ${id}`;
+        if (collection_employee) {
+          const { rows: empRows } = await sql`SELECT id FROM employees WHERE name = ${collection_employee}`;
+          if (empRows.length === 0) {
+            await sql`INSERT INTO employees (name) VALUES (${collection_employee})`;
+          }
+        }
+      }
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/outputs/:id/return", async (req, res) => {
+    const { id } = req.params;
+    const { items, user_id, collection_employee } = req.body; // items is [{ article_id, quantity_in, observations }]
 
     try {
-      const transaction = db.transaction(() => {
-        const output = db.prepare("SELECT * FROM outputs WHERE id = ?").get(id) as any;
-        if (!output) throw new Error("Entrega não encontrada.");
+      const { rows: outputRows } = await sql`SELECT * FROM outputs WHERE id = ${id}`;
+      if (outputRows.length === 0) throw new Error("Entrega não encontrada.");
 
-        const createdAt = new Date().toISOString();
-
-        for (const item of items) {
-          // Update output_items
-          db.prepare("UPDATE output_items SET quantity_in = quantity_in + ? WHERE output_id = ? AND article_id = ?")
-            .run(item.quantity_in, id, item.article_id);
-
-          // Update article stock
-          db.prepare("UPDATE articles SET available_stock = available_stock + ? WHERE id = ?")
-            .run(item.quantity_in, item.article_id);
-
-          // Insert Movement
-          db.prepare(`
-            INSERT INTO movements (article_id, user_id, type, quantity, date, observations, destination)
-            VALUES (?, ?, 'IN', ?, ?, ?, ?)
-          `).run(
-            item.article_id, user_id, item.quantity_in, createdAt, 
-            `Recolha (Retorno Entrega #${id}): ${item.observations || ''}`, 'Armazém'
-          );
+      // Update collection employee if provided
+      if (collection_employee) {
+        await sql`UPDATE outputs SET collection_employee = ${collection_employee} WHERE id = ${id}`;
+        const { rows: empRows } = await sql`SELECT id FROM employees WHERE name = ${collection_employee}`;
+        if (empRows.length === 0) {
+          await sql`INSERT INTO employees (name) VALUES (${collection_employee})`;
         }
+      }
 
-        return true;
-      });
+      const createdAt = new Date().toISOString();
 
-      transaction();
+      for (const item of items) {
+        // Update output_items
+        await sql`UPDATE output_items SET quantity_in = quantity_in + ${item.quantity_in} WHERE output_id = ${id} AND article_id = ${item.article_id}`;
+
+        // Update article stock
+        await sql`UPDATE articles SET available_stock = available_stock + ${item.quantity_in} WHERE id = ${item.article_id}`;
+
+        // Insert Movement
+        await sql`
+          INSERT INTO movements (article_id, user_id, type, quantity, date, observations, destination)
+          VALUES (${item.article_id}, ${user_id}, 'IN', ${item.quantity_in}, ${createdAt}, ${`Recolha (Retorno Entrega #${id}): ${item.observations || ''}`}, 'Armazém')
+        `;
+      }
+
       res.json({ success: true });
     } catch (e: any) {
       console.error("[RETURN ERROR]", e);
@@ -519,123 +608,109 @@ async function startServer() {
   });
 
   // Movements Endpoints
-  app.get("/api/movements", (req, res) => {
-    const movements = db.prepare(`
-      SELECT m.*, a.description as article_description, a.code as article_code, u.name as user_name
-      FROM movements m
-      JOIN articles a ON m.article_id = a.id
-      JOIN users u ON m.user_id = u.id
-      ORDER BY m.date DESC
-    `).all();
-    res.json(movements);
+  app.get("/api/movements", async (req, res) => {
+    try {
+      const { rows: movements } = await sql`
+        SELECT m.*, a.description as article_description, a.code as article_code, u.name as user_name
+        FROM movements m
+        JOIN articles a ON m.article_id = a.id
+        JOIN users u ON m.user_id = u.id
+        ORDER BY m.date DESC
+      `;
+      res.json(movements);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
-  app.delete("/api/movements/:id", (req, res) => {
+  app.delete("/api/movements/:id", async (req, res) => {
     const { id } = req.params;
     try {
-      const transaction = db.transaction(() => {
-        const movement = db.prepare("SELECT * FROM movements WHERE id = ?").get(id) as any;
-        if (!movement) throw new Error("Movimento não encontrado.");
+      const { rows: movementRows } = await sql`SELECT * FROM movements WHERE id = ${id}`;
+      if (movementRows.length === 0) throw new Error("Movimento não encontrado.");
 
-        // If it's a return movement, we need to update the output_items
-        const returnMatch = movement.observations?.match(/Recolha \(Retorno Entrega #(\d+)\)/);
-        if (returnMatch && movement.type === 'IN') {
-          const outputId = returnMatch[1];
-          db.prepare("UPDATE output_items SET quantity_in = quantity_in - ? WHERE output_id = ? AND article_id = ?")
-            .run(movement.quantity, outputId, movement.article_id);
-        }
+      const movement = movementRows[0];
 
-        // Revert stock
-        const stockChange = movement.type === 'IN' ? -movement.quantity : movement.quantity;
-        db.prepare("UPDATE articles SET available_stock = available_stock + ? WHERE id = ?")
-          .run(stockChange, movement.article_id);
+      // If it's a return movement, we need to update the output_items
+      const returnMatch = movement.observations?.match(/Recolha \(Retorno Entrega #(\d+)\)/);
+      if (returnMatch && movement.type === 'IN') {
+        const outputId = returnMatch[1];
+        await sql`UPDATE output_items SET quantity_in = quantity_in - ${movement.quantity} WHERE output_id = ${outputId} AND article_id = ${movement.article_id}`;
+      }
 
-        db.prepare("DELETE FROM movements WHERE id = ?").run(id);
-        return true;
-      });
+      // Revert stock
+      const stockChange = movement.type === 'IN' ? -movement.quantity : movement.quantity;
+      await sql`UPDATE articles SET available_stock = available_stock + ${stockChange} WHERE id = ${movement.article_id}`;
 
-      transaction();
+      await sql`DELETE FROM movements WHERE id = ${id}`;
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
   });
 
-  app.put("/api/movements/:id", (req, res) => {
+  app.put("/api/movements/:id", async (req, res) => {
     const { id } = req.params;
     const { quantity, observations } = req.body;
 
     try {
-      const transaction = db.transaction(() => {
-        const movement = db.prepare("SELECT * FROM movements WHERE id = ?").get(id) as any;
-        if (!movement) throw new Error("Movimento não encontrado.");
+      const { rows: movementRows } = await sql`SELECT * FROM movements WHERE id = ${id}`;
+      if (movementRows.length === 0) throw new Error("Movimento não encontrado.");
 
-        // If it's a return movement, we need to update the output_items
-        const returnMatch = movement.observations?.match(/Recolha \(Retorno Entrega #(\d+)\)/);
-        if (returnMatch && movement.type === 'IN') {
-          const outputId = returnMatch[1];
-          
-          // Revert old quantity
-          db.prepare("UPDATE output_items SET quantity_in = quantity_in - ? WHERE output_id = ? AND article_id = ?")
-            .run(movement.quantity, outputId, movement.article_id);
-          db.prepare("UPDATE articles SET available_stock = available_stock - ? WHERE id = ?")
-            .run(movement.quantity, movement.article_id);
+      const movement = movementRows[0];
 
-          // Apply new quantity
-          db.prepare("UPDATE output_items SET quantity_in = quantity_in + ? WHERE output_id = ? AND article_id = ?")
-            .run(quantity, outputId, movement.article_id);
-          db.prepare("UPDATE articles SET available_stock = available_stock + ? WHERE id = ?")
-            .run(quantity, movement.article_id);
-        } else {
-          // General movement stock update
-          const oldStockChange = movement.type === 'IN' ? movement.quantity : -movement.quantity;
-          const newStockChange = movement.type === 'IN' ? quantity : -quantity;
-          db.prepare("UPDATE articles SET available_stock = available_stock - ? + ? WHERE id = ?")
-            .run(oldStockChange, newStockChange, movement.article_id);
-        }
+      // If it's a return movement, we need to update the output_items
+      const returnMatch = movement.observations?.match(/Recolha \(Retorno Entrega #(\d+)\)/);
+      if (returnMatch && movement.type === 'IN') {
+        const outputId = returnMatch[1];
+        
+        // Revert old quantity
+        await sql`UPDATE output_items SET quantity_in = quantity_in - ${movement.quantity} WHERE output_id = ${outputId} AND article_id = ${movement.article_id}`;
+        await sql`UPDATE articles SET available_stock = available_stock - ${movement.quantity} WHERE id = ${movement.article_id}`;
 
-        db.prepare("UPDATE movements SET quantity = ?, observations = ? WHERE id = ?")
-          .run(quantity, observations, id);
+        // Apply new quantity
+        await sql`UPDATE output_items SET quantity_in = quantity_in + ${quantity} WHERE output_id = ${outputId} AND article_id = ${movement.article_id}`;
+        await sql`UPDATE articles SET available_stock = available_stock + ${quantity} WHERE id = ${movement.article_id}`;
+      } else {
+        // General movement stock update
+        const oldStockChange = movement.type === 'IN' ? movement.quantity : -movement.quantity;
+        const newStockChange = movement.type === 'IN' ? quantity : -quantity;
+        await sql`UPDATE articles SET available_stock = available_stock - ${oldStockChange} + ${newStockChange} WHERE id = ${movement.article_id}`;
+      }
 
-        return true;
-      });
-
-      transaction();
+      await sql`UPDATE movements SET quantity = ${quantity}, observations = ${observations} WHERE id = ${id}`;
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
   });
 
-  app.post("/api/movements", (req, res) => {
+  app.post("/api/movements", async (req, res) => {
     const { article_id, user_id, type, quantity, date, observations, destination, related_movement_id } = req.body;
     
     try {
-      const transaction = db.transaction(() => {
-        const article = db.prepare("SELECT available_stock FROM articles WHERE id = ?").get(article_id) as any;
-        if (!article) throw new Error("Artigo não encontrado");
+      const { rows: articleRows } = await sql`SELECT available_stock FROM articles WHERE id = ${article_id}`;
+      if (articleRows.length === 0) throw new Error("Artigo não encontrado");
 
-        const qty = Number(quantity);
-        let newStock = article.available_stock;
-        if (type === 'OUT') {
-          if (article.available_stock < qty) throw new Error("Stock insuficiente");
-          newStock -= qty;
-        } else {
-          newStock += qty;
-        }
+      const article = articleRows[0];
+      const qty = Number(quantity);
+      let newStock = article.available_stock;
+      if (type === 'OUT') {
+        if (article.available_stock < qty) throw new Error("Stock insuficiente");
+        newStock -= qty;
+      } else {
+        newStock += qty;
+      }
 
-        db.prepare("UPDATE articles SET available_stock = ? WHERE id = ?").run(newStock, article_id);
-        
-        const info = db.prepare(`
-          INSERT INTO movements (article_id, user_id, type, quantity, date, observations, destination, related_movement_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(article_id, user_id, type, qty, date, observations, destination, related_movement_id);
+      await sql`UPDATE articles SET available_stock = ${newStock} WHERE id = ${article_id}`;
+      
+      const { rows: movementRows } = await sql`
+        INSERT INTO movements (article_id, user_id, type, quantity, date, observations, destination, related_movement_id)
+        VALUES (${article_id}, ${user_id}, ${type}, ${qty}, ${date}, ${observations}, ${destination}, ${related_movement_id})
+        RETURNING id
+      `;
 
-        return info.lastInsertRowid;
-      });
-
-      const id = transaction();
-      res.json({ success: true, id });
+      res.json({ success: true, id: movementRows[0].id });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
     }
