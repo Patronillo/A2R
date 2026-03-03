@@ -70,12 +70,26 @@ const isHoliday = (date: Date) => {
 
 type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar' | 'position';
 
+const UNDEFINED_DATE = '9999-12-31T23:59';
+
 const formatFullDate = (dateStr: string | null | undefined) => {
   if (!dateStr) return 'N/A';
+  if (dateStr === UNDEFINED_DATE) return 'Não definido';
   const d = new Date(dateStr);
   const days = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
   const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
   return `${d.getDate()}, ${months[d.getMonth()]}, ${d.getFullYear()} ${days[d.getDay()]} ${d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+};
+
+const formatDateDisplay = (dateStr: string | null | undefined) => {
+  if (!dateStr) return 'N/A';
+  if (dateStr === UNDEFINED_DATE) return 'Não definido';
+  return new Date(dateStr).toLocaleDateString();
+};
+
+const formatTimeDisplay = (dateStr: string | null | undefined) => {
+  if (!dateStr || dateStr === UNDEFINED_DATE) return '';
+  return new Date(dateStr).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
 };
 
 const StockTimeline = ({ article, outputs, timelineRef }: { article: Article, outputs: Output[], timelineRef?: React.RefObject<HTMLDivElement | null> }) => {
@@ -277,6 +291,12 @@ export default function App() {
   const timelineRef = React.useRef<HTMLDivElement>(null);
 
   const articleCodeInputRef = React.useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (showOutputForm) {
+      setOutputFormTab('info');
+    }
+  }, [showOutputForm]);
 
   // Handle browser back button
   useEffect(() => {
@@ -2151,8 +2171,8 @@ export default function App() {
                                     <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
                                       <div className="text-center">
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem vai entregar</p>
-                                        <p className="text-[10px] font-bold text-slate-700">{output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}</p>
-                                        <p className="text-[9px] text-slate-500 mb-1">{output.delivery_date ? new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{formatDateDisplay(output.delivery_date)}</p>
+                                        <p className="text-[9px] text-slate-500 mb-1">{formatTimeDisplay(output.delivery_date)}</p>
                                         <input 
                                           type="text"
                                           list="employees-list"
@@ -2164,13 +2184,13 @@ export default function App() {
                                       </div>
                                       <div className="text-center border-x border-slate-200">
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Montagem</p>
-                                        <p className="text-[10px] font-bold text-slate-700">{output.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}</p>
-                                        <p className="text-[9px] text-slate-500">{output.assembly_date ? new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{formatDateDisplay(output.assembly_date)}</p>
+                                        <p className="text-[9px] text-slate-500">{formatTimeDisplay(output.assembly_date)}</p>
                                       </div>
                                       <div className="text-center">
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem fez recolha</p>
-                                        <p className="text-[10px] font-bold text-emerald-600">{output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}</p>
-                                        <p className="text-[9px] text-emerald-500 mb-1">{output.collection_date ? new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <p className="text-[10px] font-bold text-emerald-600">{formatDateDisplay(output.collection_date)}</p>
+                                        <p className="text-[9px] text-emerald-500 mb-1">{formatTimeDisplay(output.collection_date)}</p>
                                         <input 
                                           type="text"
                                           list="employees-list"
@@ -2350,8 +2370,8 @@ export default function App() {
                                     <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
                                       <div className="text-center">
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem vai entregar</p>
-                                        <p className="text-[10px] font-bold text-slate-700">{output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}</p>
-                                        <p className="text-[9px] text-slate-500 mb-1">{output.delivery_date ? new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{formatDateDisplay(output.delivery_date)}</p>
+                                        <p className="text-[9px] text-slate-500 mb-1">{formatTimeDisplay(output.delivery_date)}</p>
                                         <input 
                                           type="text"
                                           list="employees-list"
@@ -2578,8 +2598,8 @@ export default function App() {
                                     <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-100">
                                       <div className="text-center">
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem vai entregar</p>
-                                        <p className="text-[10px] font-bold text-slate-700">{output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}</p>
-                                        <p className="text-[9px] text-slate-500 mb-1">{output.delivery_date ? new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{formatDateDisplay(output.delivery_date)}</p>
+                                        <p className="text-[9px] text-slate-500 mb-1">{formatTimeDisplay(output.delivery_date)}</p>
                                         <input 
                                           type="text"
                                           list="employees-list"
@@ -2591,13 +2611,13 @@ export default function App() {
                                       </div>
                                       <div className="text-center border-x border-slate-200">
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Montagem</p>
-                                        <p className="text-[10px] font-bold text-slate-700">{output.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}</p>
-                                        <p className="text-[9px] text-slate-500">{output.assembly_date ? new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{formatDateDisplay(output.assembly_date)}</p>
+                                        <p className="text-[9px] text-slate-500">{formatTimeDisplay(output.assembly_date)}</p>
                                       </div>
                                       <div className="text-center">
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem fez recolha</p>
-                                        <p className="text-[10px] font-bold text-emerald-600">{output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}</p>
-                                        <p className="text-[9px] text-emerald-500 mb-1">{output.collection_date ? new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <p className="text-[10px] font-bold text-emerald-600">{formatDateDisplay(output.collection_date)}</p>
+                                        <p className="text-[9px] text-emerald-500 mb-1">{formatTimeDisplay(output.collection_date)}</p>
                                         <input 
                                           type="text"
                                           list="employees-list"
@@ -3522,8 +3542,8 @@ export default function App() {
                                       <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
                                       <div className="flex flex-col gap-2">
                                         <p className="text-slate-600 font-medium">
-                                          {output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
-                                          {output.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                          {formatDateDisplay(output.delivery_date)}
+                                          {output.delivery_date && output.delivery_date !== UNDEFINED_DATE && <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.delivery_date)}</span>}
                                         </p>
                                         <input 
                                           type="text"
@@ -3538,16 +3558,16 @@ export default function App() {
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
                                       <p className="text-slate-600 font-medium">
-                                        {output.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}
-                                        {output.assembly_date && <span className="block text-[10px] opacity-70">{new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                        {formatDateDisplay(output.assembly_date)}
+                                        {output.assembly_date && output.assembly_date !== UNDEFINED_DATE && <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.assembly_date)}</span>}
                                       </p>
                                     </div>
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1 text-emerald-500">Recolha</p>
                                       <div className="flex flex-col gap-2">
                                         <p className="text-emerald-600 font-bold">
-                                          {output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}
-                                          {output.collection_date && <span className="block text-[10px] opacity-70">{new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                          {formatDateDisplay(output.collection_date)}
+                                          {output.collection_date && output.collection_date !== UNDEFINED_DATE && <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.collection_date)}</span>}
                                         </p>
                                         <input 
                                           type="text"
@@ -3897,20 +3917,48 @@ export default function App() {
                                 />
                               </div>
                               <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Data/Hora Montagem</label>
+                                <div className="flex justify-between items-center mb-1">
+                                  <label className="block text-sm font-medium text-slate-700">Data/Hora Montagem</label>
+                                  <button 
+                                    type="button"
+                                    onClick={() => setOutputForm({...outputForm, assembly_date: outputForm.assembly_date === UNDEFINED_DATE ? '' : UNDEFINED_DATE})}
+                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-colors ${outputForm.assembly_date === UNDEFINED_DATE ? 'bg-a2r-blue-dark text-white' : 'text-a2r-blue-dark bg-blue-50 hover:bg-blue-100'}`}
+                                  >
+                                    Não definido
+                                  </button>
+                                </div>
                                 <input 
-                                  type="datetime-local" 
+                                  type={outputForm.assembly_date === UNDEFINED_DATE ? "text" : "datetime-local"}
                                   className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                                  value={outputForm.assembly_date || ''}
+                                  value={outputForm.assembly_date === UNDEFINED_DATE ? "Não definido" : (outputForm.assembly_date || '')}
+                                  onFocus={() => {
+                                    if (outputForm.assembly_date === UNDEFINED_DATE) {
+                                      setOutputForm({...outputForm, assembly_date: ''});
+                                    }
+                                  }}
                                   onChange={e => setOutputForm({...outputForm, assembly_date: e.target.value})}
                                 />
                               </div>
                               <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Data/Hora Recolha</label>
+                                <div className="flex justify-between items-center mb-1">
+                                  <label className="block text-sm font-medium text-slate-700">Data/Hora Recolha</label>
+                                  <button 
+                                    type="button"
+                                    onClick={() => setOutputForm({...outputForm, collection_date: outputForm.collection_date === UNDEFINED_DATE ? '' : UNDEFINED_DATE})}
+                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-colors ${outputForm.collection_date === UNDEFINED_DATE ? 'bg-a2r-blue-dark text-white' : 'text-a2r-blue-dark bg-blue-50 hover:bg-blue-100'}`}
+                                  >
+                                    Não definido
+                                  </button>
+                                </div>
                                 <input 
-                                  type="datetime-local" 
+                                  type={outputForm.collection_date === UNDEFINED_DATE ? "text" : "datetime-local"}
                                   className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                                  value={outputForm.collection_date || ''}
+                                  value={outputForm.collection_date === UNDEFINED_DATE ? "Não definido" : (outputForm.collection_date || '')}
+                                  onFocus={() => {
+                                    if (outputForm.collection_date === UNDEFINED_DATE) {
+                                      setOutputForm({...outputForm, collection_date: ''});
+                                    }
+                                  }}
                                   onChange={e => setOutputForm({...outputForm, collection_date: e.target.value})}
                                 />
                               </div>
