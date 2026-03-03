@@ -1,14 +1,15 @@
 {
   "version": 2,
-  "functions": {
-    "server.ts": {
-      "memory": 1024
+  "builds": [
+    {
+      "src": "server.ts",
+      "use": "@vercel/node"
     }
-  },
+  ],
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/server.ts"
+      "destination": "server.ts"
     },
     {
       "source": "/(.*)",
