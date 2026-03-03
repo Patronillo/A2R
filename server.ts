@@ -124,6 +124,23 @@ async function ensureSchema() {
   }
 }
 
+// Helper to cleanup unused employees
+async function cleanupEmployees() {
+  try {
+    await sql`
+      DELETE FROM employees 
+      WHERE name NOT IN (
+        SELECT delivery_employee FROM outputs WHERE delivery_employee IS NOT NULL
+        UNION
+        SELECT collection_employee FROM outputs WHERE collection_employee IS NOT NULL
+      )
+    `;
+    console.log("[DB] Employees cleanup completed.");
+  } catch (error) {
+    console.error("[DB] Error cleaning up employees:", error);
+  }
+}
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -395,6 +412,7 @@ async function startServer() {
         `;
       }
 
+      await cleanupEmployees();
       res.json({ id: outputId });
     } catch (e: any) {
       console.error("[OUTPUT ERROR]", e);
@@ -446,6 +464,7 @@ async function startServer() {
       await sql`DELETE FROM output_items WHERE output_id = ${id}`;
       await sql`DELETE FROM outputs WHERE id = ${id}`;
 
+      await cleanupEmployees();
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
@@ -542,6 +561,7 @@ async function startServer() {
         }
       }
 
+      await cleanupEmployees();
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
@@ -570,6 +590,7 @@ async function startServer() {
           }
         }
       }
+      await cleanupEmployees();
       res.json({ success: true });
     } catch (e: any) {
       res.status(400).json({ error: e.message });
@@ -609,6 +630,7 @@ async function startServer() {
         `;
       }
 
+      await cleanupEmployees();
       res.json({ success: true });
     } catch (e: any) {
       console.error("[RETURN ERROR]", e);

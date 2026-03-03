@@ -72,6 +72,26 @@ type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'e
 
 const UNDEFINED_DATE = '9999-12-31T23:59';
 
+const formatDateForInput = (dateString: string | undefined | null) => {
+  if (!dateString) return '';
+  if (dateString.startsWith('9999-12-31T23:59')) return UNDEFINED_DATE;
+  
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return dateString;
+    
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  } catch (e) {
+    return dateString;
+  }
+};
+
 const formatFullDate = (dateStr: string | null | undefined) => {
   if (!dateStr) return 'N/A';
   if (dateStr === UNDEFINED_DATE) return 'Não definido';
@@ -635,6 +655,7 @@ export default function App() {
           await fetchArticles();
           await fetchOutputs();
           await fetchMovements();
+          await fetchEmployees();
           if (viewSource === 'calendar') {
             setView('calendar');
           }
@@ -2112,9 +2133,9 @@ export default function App() {
                                           type: output.type,
                                           client_name: output.client_name,
                                           client_contact: output.client_contact,
-                                          delivery_date: output.delivery_date,
-                                          assembly_date: output.assembly_date,
-                                          collection_date: output.collection_date,
+                                          delivery_date: formatDateForInput(output.delivery_date),
+                                          assembly_date: formatDateForInput(output.assembly_date),
+                                          collection_date: formatDateForInput(output.collection_date),
                                           with_assembly: output.with_assembly,
                                           location_name: output.location_name,
                                           space_at_location: output.space_at_location,
@@ -2311,9 +2332,9 @@ export default function App() {
                                           type: output.type,
                                           client_name: output.client_name,
                                           client_contact: output.client_contact,
-                                          delivery_date: output.delivery_date,
-                                          assembly_date: output.assembly_date,
-                                          collection_date: output.collection_date,
+                                          delivery_date: formatDateForInput(output.delivery_date),
+                                          assembly_date: formatDateForInput(output.assembly_date),
+                                          collection_date: formatDateForInput(output.collection_date),
                                           with_assembly: output.with_assembly,
                                           location_name: output.location_name,
                                           space_at_location: output.space_at_location,
@@ -2536,9 +2557,9 @@ export default function App() {
                                               type: output.type,
                                               client_name: output.client_name,
                                               client_contact: output.client_contact,
-                                              delivery_date: output.delivery_date,
-                                              assembly_date: output.assembly_date,
-                                              collection_date: output.collection_date,
+                                              delivery_date: formatDateForInput(output.delivery_date),
+                                              assembly_date: formatDateForInput(output.assembly_date),
+                                              collection_date: formatDateForInput(output.collection_date),
                                               with_assembly: output.with_assembly,
                                               location_name: output.location_name,
                                               space_at_location: output.space_at_location,
@@ -3194,15 +3215,31 @@ export default function App() {
                             <Trash2 size={20} />
                           </button>
                         </div>
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Quem fez a recolha</label>
-                          <input 
-                            type="text" 
-                            list="employees-list"
-                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
-                            value={returnEmployee}
-                            onChange={e => setReturnEmployee(e.target.value)}
-                          />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
+                            <p className="text-[10px] font-bold text-blue-400 uppercase mb-1">Funcionário de Entrega</p>
+                            <p className="font-bold text-blue-700">
+                              {(() => {
+                                const movement = movements.find(m => m.id === editingMovementId);
+                                const outputIdMatch = movement?.observations?.match(/#(\d+)/);
+                                const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
+                                const output = outputId ? outputs.find(o => o.id === outputId) : null;
+                                return output?.delivery_employee || 'Não definido';
+                              })()}
+                            </p>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Quem fez a recolha</label>
+                            <input 
+                              type="text" 
+                              list="employees-list"
+                              placeholder="Selecione ou escreva o nome..."
+                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                              value={returnEmployee}
+                              onChange={e => setReturnEmployee(e.target.value)}
+                            />
+                            <p className="text-[10px] text-slate-400 mt-1 italic">Pode selecionar um funcionário existente ou escrever um novo nome.</p>
+                          </div>
                         </div>
                         <div>
                           <label className="block text-sm font-medium text-slate-700 mb-1">Artigo</label>
@@ -3274,9 +3311,11 @@ export default function App() {
                                     initialReturns[item.article_id] = item.quantity_out - item.quantity_in;
                                   });
                                   setReturnItems(initialReturns);
+                                  setReturnEmployee(out.delivery_employee || '');
                                 }
                               } else {
                                 setReturnItems({});
+                                setReturnEmployee('');
                               }
                             }}
                           >
@@ -3291,15 +3330,25 @@ export default function App() {
 
                         {selectedOutputId && (
                           <div className="space-y-6 animate-in fade-in slide-in-from-top-4 duration-300">
-                            <div>
-                              <label className="block text-sm font-medium text-slate-700 mb-1">Quem fez a recolha</label>
-                              <input 
-                                type="text" 
-                                list="employees-list"
-                                className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
-                                value={returnEmployee}
-                                onChange={e => setReturnEmployee(e.target.value)}
-                              />
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
+                                <p className="text-[10px] font-bold text-blue-400 uppercase mb-1">Funcionário de Entrega</p>
+                                <p className="font-bold text-blue-700">
+                                  {outputs.find(o => o.id === parseInt(selectedOutputId))?.delivery_employee || 'Não definido'}
+                                </p>
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Quem fez a recolha</label>
+                                <input 
+                                  type="text" 
+                                  list="employees-list"
+                                  placeholder="Selecione ou escreva o nome..."
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                                  value={returnEmployee}
+                                  onChange={e => setReturnEmployee(e.target.value)}
+                                />
+                                <p className="text-[10px] text-slate-400 mt-1 italic">Pode selecionar um funcionário existente ou escrever um novo nome.</p>
+                              </div>
                             </div>
                             <div className="overflow-x-auto">
                               <table className="w-full">
@@ -3908,11 +3957,25 @@ export default function App() {
 
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                               <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Data/Hora Entrega</label>
+                                <div className="flex justify-between items-center mb-1">
+                                  <label className="block text-sm font-medium text-slate-700">Data/Hora Entrega</label>
+                                  <button 
+                                    type="button"
+                                    onClick={() => setOutputForm({...outputForm, delivery_date: outputForm.delivery_date === UNDEFINED_DATE ? '' : UNDEFINED_DATE})}
+                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition-colors ${outputForm.delivery_date === UNDEFINED_DATE ? 'bg-a2r-blue-dark text-white' : 'text-a2r-blue-dark bg-blue-50 hover:bg-blue-100'}`}
+                                  >
+                                    Não definido
+                                  </button>
+                                </div>
                                 <input 
-                                  type="datetime-local" 
+                                  type={outputForm.delivery_date === UNDEFINED_DATE ? "text" : "datetime-local"} 
                                   className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                                  value={outputForm.delivery_date || ''}
+                                  value={outputForm.delivery_date === UNDEFINED_DATE ? "Não definido" : (outputForm.delivery_date || '')}
+                                  onFocus={() => {
+                                    if (outputForm.delivery_date === UNDEFINED_DATE) {
+                                      setOutputForm({...outputForm, delivery_date: ''});
+                                    }
+                                  }}
                                   onChange={e => setOutputForm({...outputForm, delivery_date: e.target.value})}
                                 />
                               </div>
@@ -4342,9 +4405,9 @@ export default function App() {
                                         type: output.type,
                                         client_name: output.client_name,
                                         client_contact: output.client_contact,
-                                        delivery_date: output.delivery_date,
-                                        assembly_date: output.assembly_date,
-                                        collection_date: output.collection_date,
+                                        delivery_date: formatDateForInput(output.delivery_date),
+                                        assembly_date: formatDateForInput(output.assembly_date),
+                                        collection_date: formatDateForInput(output.collection_date),
                                         with_assembly: output.with_assembly,
                                         location_name: output.location_name,
                                         space_at_location: output.space_at_location,
