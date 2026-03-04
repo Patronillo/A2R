@@ -910,9 +910,9 @@ export default function App() {
         startY: yPos + 5,
         head: [['ID', 'Cliente', 'Local', 'Hora']],
         body: dayOutputs.map(o => [
-          o.id, 
-          o.client_name, 
-          o.location_name, 
+          o.id.toString(), 
+          o.client_name || '', 
+          o.location_name || '', 
           o.delivery_date ? new Date(o.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''
         ]),
         theme: 'grid',
@@ -932,9 +932,9 @@ export default function App() {
         startY: yPos + 5,
         head: [['ID', 'Cliente', 'Local', 'Hora']],
         body: dayActiveRecolhas.map(o => [
-          o.id, 
-          o.client_name, 
-          o.location_name, 
+          o.id.toString(), 
+          o.client_name || '', 
+          o.location_name || '', 
           o.collection_date ? new Date(o.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''
         ]),
         theme: 'grid',
@@ -2194,13 +2194,13 @@ export default function App() {
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem vai entregar</p>
                                         <p className="text-[10px] font-bold text-slate-700">{formatDateDisplay(output.delivery_date)}</p>
                                         <p className="text-[9px] text-slate-500 mb-1">{formatTimeDisplay(output.delivery_date)}</p>
-                                        <input 
-                                          type="text"
-                                          list="employees-list"
+                                        <Combobox 
+                                          value={output.delivery_employee || ''}
+                                          onChange={val => handleUpdateOutputEmployee(output.id, { delivery_employee: val })}
+                                          options={employees.map(e => e.name)}
                                           placeholder="Funcionário..."
                                           className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
-                                          value={output.delivery_employee || ''}
-                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                          listId={`delivery-emp-${output.id}`}
                                         />
                                       </div>
                                       <div className="text-center border-x border-slate-200">
@@ -2212,13 +2212,13 @@ export default function App() {
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem fez recolha</p>
                                         <p className="text-[10px] font-bold text-emerald-600">{formatDateDisplay(output.collection_date)}</p>
                                         <p className="text-[9px] text-emerald-500 mb-1">{formatTimeDisplay(output.collection_date)}</p>
-                                        <input 
-                                          type="text"
-                                          list="employees-list"
+                                        <Combobox 
+                                          value={output.collection_employee || ''}
+                                          onChange={val => handleUpdateOutputEmployee(output.id, { collection_employee: val })}
+                                          options={employees.map(e => e.name)}
                                           placeholder="Funcionário..."
                                           className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
-                                          value={output.collection_employee || ''}
-                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                          listId={`collection-emp-${output.id}`}
                                         />
                                       </div>
                                     <div className="col-span-3 text-right pt-1 border-t border-slate-200 mt-1">
@@ -2393,31 +2393,31 @@ export default function App() {
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem vai entregar</p>
                                         <p className="text-[10px] font-bold text-slate-700">{formatDateDisplay(output.delivery_date)}</p>
                                         <p className="text-[9px] text-slate-500 mb-1">{formatTimeDisplay(output.delivery_date)}</p>
-                                        <input 
-                                          type="text"
-                                          list="employees-list"
+                                        <Combobox 
+                                          value={output.delivery_employee || ''}
+                                          onChange={val => handleUpdateOutputEmployee(output.id, { delivery_employee: val })}
+                                          options={employees.map(e => e.name)}
                                           placeholder="Funcionário..."
                                           className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
-                                          value={output.delivery_employee || ''}
-                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                          listId={`delivery-emp-act-${output.id}`}
                                         />
                                       </div>
                                       <div className="text-center border-x border-slate-200">
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Montagem</p>
-                                        <p className="text-[10px] font-bold text-slate-700">{output.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}</p>
-                                        <p className="text-[9px] text-slate-500">{output.assembly_date ? new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                                        <p className="text-[10px] font-bold text-slate-700">{formatDateDisplay(output.assembly_date)}</p>
+                                        <p className="text-[9px] text-slate-500">{formatTimeDisplay(output.assembly_date)}</p>
                                       </div>
                                       <div className="text-center">
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem fez recolha</p>
-                                        <p className="text-[10px] font-bold text-emerald-600">{output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}</p>
-                                        <p className="text-[9px] text-emerald-500 mb-1">{output.collection_date ? new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
-                                        <input 
-                                          type="text"
-                                          list="employees-list"
+                                        <p className="text-[10px] font-bold text-emerald-600">{formatDateDisplay(output.collection_date)}</p>
+                                        <p className="text-[9px] text-emerald-500 mb-1">{formatTimeDisplay(output.collection_date)}</p>
+                                        <Combobox 
+                                          value={output.collection_employee || ''}
+                                          onChange={val => handleUpdateOutputEmployee(output.id, { collection_employee: val })}
+                                          options={employees.map(e => e.name)}
                                           placeholder="Funcionário..."
                                           className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
-                                          value={output.collection_employee || ''}
-                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                          listId={`collection-emp-act-${output.id}`}
                                         />
                                       </div>
                                     <div className="col-span-3 text-right pt-1 border-t border-slate-200 mt-1">
@@ -2621,13 +2621,13 @@ export default function App() {
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem vai entregar</p>
                                         <p className="text-[10px] font-bold text-slate-700">{formatDateDisplay(output.delivery_date)}</p>
                                         <p className="text-[9px] text-slate-500 mb-1">{formatTimeDisplay(output.delivery_date)}</p>
-                                        <input 
-                                          type="text"
-                                          list="employees-list"
+                                        <Combobox 
+                                          value={output.delivery_employee || ''}
+                                          onChange={val => handleUpdateOutputEmployee(output.id, { delivery_employee: val })}
+                                          options={employees.map(e => e.name)}
                                           placeholder="Funcionário..."
                                           className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
-                                          value={output.delivery_employee || ''}
-                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                          listId={`delivery-emp-hist-${output.id}`}
                                         />
                                       </div>
                                       <div className="text-center border-x border-slate-200">
@@ -2639,13 +2639,13 @@ export default function App() {
                                         <p className="text-[8px] font-bold text-slate-400 uppercase mb-1">Quem fez recolha</p>
                                         <p className="text-[10px] font-bold text-emerald-600">{formatDateDisplay(output.collection_date)}</p>
                                         <p className="text-[9px] text-emerald-500 mb-1">{formatTimeDisplay(output.collection_date)}</p>
-                                        <input 
-                                          type="text"
-                                          list="employees-list"
+                                        <Combobox 
+                                          value={output.collection_employee || ''}
+                                          onChange={val => handleUpdateOutputEmployee(output.id, { collection_employee: val })}
+                                          options={employees.map(e => e.name)}
                                           placeholder="Funcionário..."
                                           className="text-[8px] font-bold px-1 py-0.5 rounded border outline-none w-full bg-white text-slate-600 border-slate-200"
-                                          value={output.collection_employee || ''}
-                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                          listId={`collection-emp-hist-${output.id}`}
                                         />
                                       </div>
                                       <div className="col-span-3 text-right pt-1 border-t border-slate-200 mt-1">
@@ -3230,13 +3230,13 @@ export default function App() {
                           </div>
                           <div>
                             <label className="block text-sm font-medium text-slate-700 mb-1">Quem fez a recolha</label>
-                            <input 
-                              type="text" 
-                              list="employees-list"
+                            <Combobox 
+                              value={returnEmployee}
+                              onChange={setReturnEmployee}
+                              options={employees.map(e => e.name)}
                               placeholder="Selecione ou escreva o nome..."
                               className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
-                              value={returnEmployee}
-                              onChange={e => setReturnEmployee(e.target.value)}
+                              listId="edit-recolha-emp"
                             />
                             <p className="text-[10px] text-slate-400 mt-1 italic">Pode selecionar um funcionário existente ou escrever um novo nome.</p>
                           </div>
@@ -3339,13 +3339,13 @@ export default function App() {
                               </div>
                               <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-1">Quem fez a recolha</label>
-                                <input 
-                                  type="text" 
-                                  list="employees-list"
+                                <Combobox 
+                                  value={returnEmployee}
+                                  onChange={setReturnEmployee}
+                                  options={employees.map(e => e.name)}
                                   placeholder="Selecione ou escreva o nome..."
                                   className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
-                                  value={returnEmployee}
-                                  onChange={e => setReturnEmployee(e.target.value)}
+                                  listId="new-recolha-emp"
                                 />
                                 <p className="text-[10px] text-slate-400 mt-1 italic">Pode selecionar um funcionário existente ou escrever um novo nome.</p>
                               </div>
@@ -3497,7 +3497,7 @@ export default function App() {
                         const relatedOutput = outputs.find(o => o.id === outputId);
                         const matchesSearch = (relatedOutput?.client_name.toLowerCase().includes(inputSearch.toLowerCase()) || 
                                              relatedOutput?.location_name?.toLowerCase().includes(inputSearch.toLowerCase()) ||
-                                             m.article_description.toLowerCase().includes(inputSearch.toLowerCase()));
+                                             (m.article_description?.toLowerCase().includes(inputSearch.toLowerCase()) || false));
                         const matchesDate = !inputStartDate || (m.date && m.date >= inputStartDate);
                         
                         if (matchesSearch && matchesDate) {
@@ -3573,7 +3573,7 @@ export default function App() {
                                           setSelectedOutputId(output.id.toString());
                                           setReturnEmployee(output.collection_employee || '');
                                           const initialReturns: Record<number, number> = {};
-                                          output.items?.forEach(item => {
+                                          output.items?.forEach((item: any) => {
                                             initialReturns[item.article_id] = item.quantity_out - item.quantity_in;
                                           });
                                           setReturnItems(initialReturns);
@@ -3594,13 +3594,13 @@ export default function App() {
                                           {formatDateDisplay(output.delivery_date)}
                                           {output.delivery_date && output.delivery_date !== UNDEFINED_DATE && <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.delivery_date)}</span>}
                                         </p>
-                                        <input 
-                                          type="text"
-                                          list="employees-list"
-                                          placeholder="Funcionário..."
-                                          className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                        <Combobox 
                                           value={output.delivery_employee || ''}
-                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                          onChange={(val) => handleUpdateOutputEmployee(output.id, { delivery_employee: val })}
+                                          options={employees.map(e => e.name)}
+                                          placeholder="Funcionário..."
+                                          className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200 w-full"
+                                          listId={`recolhas-delivery-emp-${output.id}`}
                                         />
                                       </div>
                                     </div>
@@ -3618,13 +3618,13 @@ export default function App() {
                                           {formatDateDisplay(output.collection_date)}
                                           {output.collection_date && output.collection_date !== UNDEFINED_DATE && <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.collection_date)}</span>}
                                         </p>
-                                        <input 
-                                          type="text"
-                                          list="employees-list"
-                                          placeholder="Funcionário..."
-                                          className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                        <Combobox 
                                           value={output.collection_employee || ''}
-                                          onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                          onChange={(val) => handleUpdateOutputEmployee(output.id, { collection_employee: val })}
+                                          options={employees.map(e => e.name)}
+                                          placeholder="Funcionário..."
+                                          className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200 w-full"
+                                          listId={`recolhas-collection-emp-${output.id}`}
                                         />
                                       </div>
                                     </div>
@@ -3652,7 +3652,7 @@ export default function App() {
                                         <div className="bg-slate-50 rounded-2xl p-4">
                                           <p className="text-xs font-bold text-slate-400 uppercase mb-3 tracking-widest">Artigos Pendentes</p>
                                           <div className="space-y-3">
-                                            {output.items?.map(item => (
+                                            {output.items?.map((item: any) => (
                                               <div key={item.id} className="flex justify-between items-center text-sm">
                                                 <div className="flex-1">
                                                   <span className="text-slate-700 font-medium block">{item.article_description}</span>
@@ -3724,13 +3724,13 @@ export default function App() {
                                           {output?.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
                                         </p>
                                         {output && (
-                                          <input 
-                                            type="text"
-                                            list="employees-list"
-                                            placeholder="Funcionário..."
-                                            className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                          <Combobox 
                                             value={output.delivery_employee || ''}
-                                            onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                            onChange={(val) => handleUpdateOutputEmployee(output.id, { delivery_employee: val })}
+                                            options={employees.map(e => e.name)}
+                                            placeholder="Funcionário..."
+                                            className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200 w-full"
+                                            listId={`completed-delivery-emp-${output.id}`}
                                           />
                                         )}
                                       </div>
@@ -3749,13 +3749,13 @@ export default function App() {
                                           {new Date(group.date).toLocaleDateString()}
                                         </p>
                                         {output && (
-                                          <input 
-                                            type="text"
-                                            list="employees-list"
-                                            placeholder="Funcionário..."
-                                            className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                          <Combobox 
                                             value={output.collection_employee || ''}
-                                            onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                            onChange={(val) => handleUpdateOutputEmployee(output.id, { collection_employee: val })}
+                                            options={employees.map(e => e.name)}
+                                            placeholder="Funcionário..."
+                                            className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200 w-full"
+                                            listId={`completed-collection-emp-${output.id}`}
                                           />
                                         )}
                                       </div>
@@ -4050,15 +4050,27 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-1 gap-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                               <div>
                                 <label className="block text-sm font-medium text-slate-700 mb-1">Quem vai fazer entrega</label>
-                                <input 
-                                  type="text" 
-                                  list="employees-list"
-                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                <Combobox 
                                   value={outputForm.delivery_employee || ''}
-                                  onChange={e => setOutputForm({...outputForm, delivery_employee: e.target.value})}
+                                  onChange={val => setOutputForm({...outputForm, delivery_employee: val})}
+                                  options={employees.map(e => e.name)}
+                                  placeholder="Selecione ou escreva o nome..."
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  listId="delivery-emp"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Quem vai fazer recolha</label>
+                                <Combobox 
+                                  value={outputForm.collection_employee || ''}
+                                  onChange={val => setOutputForm({...outputForm, collection_employee: val})}
+                                  options={employees.map(e => e.name)}
+                                  placeholder="Selecione ou escreva o nome..."
+                                  className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                                  listId="collection-emp"
                                 />
                               </div>
                             </div>
@@ -4244,7 +4256,6 @@ export default function App() {
                                                 return;
                                               }
                                               setConfirmModal({
-                                                isOpen: true,
                                                 message: 'Tem a certeza que deseja eliminar este artigo da entrega?',
                                                 onConfirm: () => removeItemFromOutput(item.article_id)
                                               });
@@ -4438,40 +4449,46 @@ export default function App() {
                                   <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
                                   <div className="flex flex-col gap-2">
                                     <p className="text-slate-600 font-medium">
-                                      {output.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
-                                      {output.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                      {formatDateDisplay(output.delivery_date)}
+                                      {output.delivery_date && output.delivery_date !== UNDEFINED_DATE && (
+                                        <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.delivery_date)}</span>
+                                      )}
                                     </p>
-                                    <input 
-                                      type="text"
-                                      list="employees-list"
-                                      placeholder="Funcionário..."
-                                      className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                    <Combobox 
                                       value={output.delivery_employee || ''}
-                                      onChange={(e) => handleUpdateOutputEmployee(output.id, { delivery_employee: e.target.value })}
+                                      onChange={(val) => handleUpdateOutputEmployee(output.id, { delivery_employee: val })}
+                                      options={employees.map(e => e.name)}
+                                      placeholder="Funcionário..."
+                                      className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200 w-full"
+                                      listId={`list-delivery-emp-${output.id}`}
                                     />
                                   </div>
                                 </div>
                                 <div>
                                   <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
                                   <p className="text-slate-600 font-medium">
-                                    {output.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}
-                                    {output.assembly_date && <span className="block text-[10px] opacity-70">{new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                    {formatDateDisplay(output.assembly_date)}
+                                    {output.assembly_date && output.assembly_date !== UNDEFINED_DATE && (
+                                      <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.assembly_date)}</span>
+                                    )}
                                   </p>
                                 </div>
                                 <div>
                                   <p className="uppercase tracking-wider font-semibold mb-1">Recolha</p>
                                   <div className="flex flex-col gap-2">
                                     <p className="text-slate-600 font-medium">
-                                      {output.collection_date ? new Date(output.collection_date).toLocaleDateString() : 'N/A'}
-                                      {output.collection_date && <span className="block text-[10px] opacity-70">{new Date(output.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                      {formatDateDisplay(output.collection_date)}
+                                      {output.collection_date && output.collection_date !== UNDEFINED_DATE && (
+                                        <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.collection_date)}</span>
+                                      )}
                                     </p>
-                                    <input 
-                                      type="text"
-                                      list="employees-list"
-                                      placeholder="Funcionário..."
-                                      className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200"
+                                    <Combobox 
                                       value={output.collection_employee || ''}
-                                      onChange={(e) => handleUpdateOutputEmployee(output.id, { collection_employee: e.target.value })}
+                                      onChange={(val) => handleUpdateOutputEmployee(output.id, { collection_employee: val })}
+                                      options={employees.map(e => e.name)}
+                                      placeholder="Funcionário..."
+                                      className="text-[10px] font-bold px-2 py-1 rounded-lg border outline-none transition-all bg-slate-50 text-slate-600 border-slate-200 w-full"
+                                      listId={`list-collection-emp-${output.id}`}
                                     />
                                   </div>
                                 </div>
@@ -4896,6 +4913,110 @@ export default function App() {
           <option key={emp.id} value={emp.name} />
         ))}
       </datalist>
+    </div>
+  );
+}
+
+function Combobox({ 
+  value, 
+  onChange, 
+  options, 
+  placeholder, 
+  className,
+  listId 
+}: { 
+  value: string, 
+  onChange: (val: string) => void, 
+  options: string[], 
+  placeholder?: string, 
+  className?: string,
+  listId: string
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState(value);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setSearch(value);
+  }, [value]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Show all options if search matches current value exactly or is empty
+  const filteredOptions = (search === value || !search) 
+    ? options 
+    : options.filter(opt => opt.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <div className="relative">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            onChange(e.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+          placeholder={placeholder}
+          className={className}
+        />
+        <button
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 transition-colors"
+        >
+          <ChevronDown size={16} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        </button>
+      </div>
+      
+      <AnimatePresence>
+        {isOpen && (filteredOptions.length > 0 || search) && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="absolute z-[100] w-full mt-1 bg-white rounded-xl border border-slate-200 shadow-xl max-h-60 overflow-y-auto custom-scrollbar"
+          >
+            <div className="p-1">
+              {filteredOptions.map((opt, i) => (
+                <button
+                  key={`${listId}-${i}`}
+                  type="button"
+                  onClick={() => {
+                    onChange(opt);
+                    setSearch(opt);
+                    setIsOpen(false);
+                  }}
+                  className={`w-full text-left px-4 py-2 rounded-lg text-sm transition-colors ${
+                    value === opt ? 'bg-blue-50 text-blue-600 font-bold' : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {opt}
+                </button>
+              ))}
+              {search && !options.includes(search) && (
+                <button
+                  type="button"
+                  onClick={() => setIsOpen(false)}
+                  className="w-full text-left px-4 py-2 rounded-lg text-sm text-blue-500 italic hover:bg-slate-50"
+                >
+                  Novo: "{search}"
+                </button>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
