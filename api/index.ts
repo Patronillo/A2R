@@ -9,6 +9,12 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`[API] ${req.method} ${req.url}`);
+  next();
+});
+
 // Check for required environment variables
 if (!process.env.POSTGRES_URL) {
   console.warn("[DB] Warning: POSTGRES_URL is not set. Database operations will fail.");
@@ -742,6 +748,14 @@ app.post("/api/movements", async (req, res) => {
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
+});
+
+// API 404 Handler
+app.use("/api", (req, res) => {
+  res.status(404).json({ 
+    error: "Rota API não encontrada", 
+    path: req.originalUrl || req.url 
+  });
 });
 
 // Global Error Handler
