@@ -73,8 +73,7 @@ type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'e
 const UNDEFINED_DATE = '9999-12-31T23:59';
 
 const formatDateForInput = (dateString: string | undefined | null) => {
-  if (!dateString) return '';
-  if (dateString.startsWith('9999-12-31T23:59')) return UNDEFINED_DATE;
+  if (!dateString || dateString.includes('9999-12-31')) return '';
   
   try {
     const date = new Date(dateString);
@@ -94,22 +93,32 @@ const formatDateForInput = (dateString: string | undefined | null) => {
 
 const formatFullDate = (dateStr: string | null | undefined) => {
   if (!dateStr) return 'N/A';
-  if (dateStr === UNDEFINED_DATE) return 'Não definido';
+  if (dateStr.includes('9999-12-31')) return 'Não definido';
   const d = new Date(dateStr);
   const days = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
   const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
   return `${d.getDate()}, ${months[d.getMonth()]}, ${d.getFullYear()} ${days[d.getDay()]} ${d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
 };
 
-const formatDateDisplay = (dateStr: string | null | undefined) => {
-  if (!dateStr) return 'N/A';
-  if (dateStr === UNDEFINED_DATE) return 'Não definido';
+const formatDateDisplay = (date: string | Date | null | undefined) => {
+  if (!date) return 'N/A';
+  const dateStr = typeof date === 'string' ? date : date.toISOString();
+  if (dateStr.includes('9999-12-31')) return 'Não definido';
   return new Date(dateStr).toLocaleDateString();
 };
 
-const formatTimeDisplay = (dateStr: string | null | undefined) => {
-  if (!dateStr || dateStr === UNDEFINED_DATE) return '';
+const formatTimeDisplay = (date: string | Date | null | undefined) => {
+  if (!date) return 'Não definido';
+  const dateStr = typeof date === 'string' ? date : date.toISOString();
+  if (dateStr.includes('9999-12-31')) return 'Não definido';
   return new Date(dateStr).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+};
+
+const formatFullDateTime = (date: string | Date | null | undefined) => {
+  if (!date) return 'N/A';
+  const dateStr = typeof date === 'string' ? date : date.toISOString();
+  if (dateStr.includes('9999-12-31')) return 'Não definido';
+  return new Date(dateStr).toLocaleString();
 };
 
 const StockTimeline = ({ article, outputs, timelineRef }: { article: Article, outputs: Output[], timelineRef?: React.RefObject<HTMLDivElement | null> }) => {
@@ -135,7 +144,10 @@ const StockTimeline = ({ article, outputs, timelineRef }: { article: Article, ou
     ? new Date(Math.min(...activeMovements.map(o => new Date(o.delivery_date || today).getTime())))
     : today;
   const maxDate = activeMovements.length > 0
-    ? new Date(Math.max(...activeMovements.map(o => new Date(o.collection_date || today).getTime())))
+    ? new Date(Math.max(...activeMovements.map(o => {
+        const d = new Date(o.collection_date || today);
+        return d.getFullYear() === 9999 ? addDays(today, 30).getTime() : d.getTime();
+      })))
     : addDays(today, 7);
 
   return (
@@ -193,7 +205,8 @@ const StockTimeline = ({ article, outputs, timelineRef }: { article: Article, ou
               <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
                 {activeMovements.map((o, idx) => {
                   const start = new Date(o.delivery_date || today);
-                  const end = new Date(o.collection_date || today);
+                  const endRaw = new Date(o.collection_date || today);
+                  const end = endRaw.getFullYear() === 9999 ? maxDate : endRaw;
                   
                   const totalRange = maxDate.getTime() - minDate.getTime();
                   const left = ((start.getTime() - minDate.getTime()) / totalRange) * 100;
@@ -569,13 +582,18 @@ export default function App() {
       const url = editingOutputId ? `/api/outputs/${editingOutputId}` : '/api/outputs';
       const method = editingOutputId ? 'PUT' : 'POST';
       
+      const finalData = {
+        ...outputForm,
+        delivery_date: outputForm.delivery_date || new Date().toISOString(),
+        assembly_date: outputForm.assembly_date || UNDEFINED_DATE,
+        collection_date: outputForm.collection_date || UNDEFINED_DATE,
+        user_id: user?.id
+      };
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...outputForm,
-          user_id: user?.id
-        })
+        body: JSON.stringify(finalData)
       });
 
       if (res.ok) {
@@ -795,9 +813,9 @@ export default function App() {
 
     drawLabelValue('CLIENTE : ', output.client_name);
     drawLabelValue('CONTATO : ', output.client_contact || 'N/A');
-    drawLabelValue('DATA ENTREGA : ', output.delivery_date ? new Date(output.delivery_date).toLocaleString() : 'N/A');
-    drawLabelValue('DATA MONTAGEM : ', output.assembly_date ? new Date(output.assembly_date).toLocaleString() : 'N/A');
-    drawLabelValue('DATA RECOLHA : ', output.collection_date ? new Date(output.collection_date).toLocaleString() : 'N/A');
+    drawLabelValue('DATA ENTREGA : ', formatFullDate(output.delivery_date));
+    drawLabelValue('DATA MONTAGEM : ', formatFullDate(output.assembly_date));
+    drawLabelValue('DATA RECOLHA : ', formatFullDate(output.collection_date));
     drawLabelValue('LOCAL : ', `${output.location_name} ${output.space_at_location ? `- ${output.space_at_location}` : ''}`);
     drawLabelValue('MONTAGEM : ', output.with_assembly ? 'Sim' : 'Não');
     
@@ -878,7 +896,7 @@ export default function App() {
 
     doc.setFontSize(12);
     doc.setTextColor(50, 50, 50);
-    doc.text(`Data de Referência: ${new Date(date).toLocaleDateString()}`, 20, 50);
+    doc.text(`Data de Referência: ${formatDateDisplay(date)}`, 20, 50);
 
     let yPos = 65;
 
@@ -913,7 +931,7 @@ export default function App() {
           o.id.toString(), 
           o.client_name || '', 
           o.location_name || '', 
-          o.delivery_date ? new Date(o.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''
+          formatTimeDisplay(o.delivery_date)
         ]),
         theme: 'grid',
         headStyles: { fillColor: [239, 68, 68] },
@@ -935,7 +953,7 @@ export default function App() {
           o.id.toString(), 
           o.client_name || '', 
           o.location_name || '', 
-          o.collection_date ? new Date(o.collection_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''
+          formatTimeDisplay(o.collection_date)
         ]),
         theme: 'grid',
         headStyles: { fillColor: [16, 185, 129] },
@@ -966,7 +984,7 @@ export default function App() {
       reportTitle = 'RELATÓRIO DE ENTREGAS';
       reportColor = [239, 68, 68];
       const items = outputs.filter(o => o.delivery_date?.split('T')[0] === date);
-      reportData = items.map(o => [o.id, o.client_name, o.location_name, o.delivery_date ? new Date(o.delivery_date).toLocaleTimeString() : '']);
+      reportData = items.map(o => [o.id, o.client_name, o.location_name, formatTimeDisplay(o.delivery_date)]);
     } else if (category === 'ATIVAS') {
       reportTitle = 'RELATÓRIO DE RECOLHAS AGENDADAS';
       reportColor = [16, 185, 129];
@@ -974,7 +992,7 @@ export default function App() {
         o.collection_date?.split('T')[0] === date && 
         o.items?.some(item => item.quantity_out > item.quantity_in)
       );
-      reportData = items.map(o => [o.id, o.client_name, o.location_name, o.collection_date ? new Date(o.collection_date).toLocaleTimeString() : '']);
+      reportData = items.map(o => [o.id, o.client_name, o.location_name, formatTimeDisplay(o.collection_date)]);
     } else {
       reportTitle = 'RELATÓRIO DE RECOLHAS EFETUADAS';
       reportColor = [59, 130, 246];
@@ -1005,7 +1023,7 @@ export default function App() {
             output?.space_at_location || '',
             m.article_description,
             m.quantity === 0 ? '' : m.quantity.toString(),
-            m.date ? new Date(m.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''
+            m.date ? formatTimeDisplay(m.date) : ''
           ]);
         });
         // Add empty row for spacing between groups
@@ -1020,7 +1038,7 @@ export default function App() {
     doc.text(reportTitle, 20, 20);
     doc.setFontSize(10);
     doc.setTextColor(100);
-    doc.text(`Data: ${new Date(date).toLocaleDateString()}`, 20, 28);
+    doc.text(`Data: ${formatDateDisplay(date)}`, 20, 28);
 
     const head = category === 'EFETUADAS' 
       ? [['ID', 'Tipo', 'Cliente', 'Contato', 'Local', 'Espaço', 'Artigo', 'Qtd', 'Hora']]
@@ -1189,8 +1207,8 @@ export default function App() {
           m.type,
           `${m.client_name}${m.client_contact ? ` (${m.client_contact})` : ''}\n${m.location}`,
           m.quantity - m.returned,
-          format(new Date(m.delivery_date), 'dd/MM/yyyy'),
-          format(new Date(m.collection_date), 'dd/MM/yyyy')
+          formatDateDisplay(m.delivery_date),
+          formatDateDisplay(m.collection_date)
         ]);
         
         autoTable(doc, {
@@ -1498,9 +1516,9 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-slate-50 overflow-hidden">
+    <div className="min-h-screen bg-slate-50 custom-scrollbar">
       {/* Header */}
-      <header className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 z-30 shadow-sm">
+      <header className="fixed top-0 left-0 w-full bg-white border-b border-slate-200 px-6 py-4 z-50 shadow-sm">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-slate-100 overflow-hidden border border-slate-200">
@@ -1529,7 +1547,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-5xl w-full mx-auto p-6 overflow-y-auto custom-scrollbar">
+      <main className={`max-w-5xl w-full mx-auto p-6 pt-24 pb-24 ${['outputs', 'inputs'].includes(view) && !showOutputForm && !showInputForm ? 'h-screen overflow-hidden' : ''}`}>
         <AnimatePresence mode="wait">
           {view === 'menu' && (
             <motion.div
@@ -1884,7 +1902,7 @@ export default function App() {
             >
               <div className="flex items-center justify-between shrink-0">
                 <h2 className="text-2xl font-bold text-slate-800">
-                  {showCalendarDetail ? `Detalhes: ${new Date(calendarDate).toLocaleDateString()}` : 'Calendário'}
+                  {showCalendarDetail ? `Detalhes: ${formatDateDisplay(calendarDate)}` : 'Calendário'}
                 </h2>
                 <div className="flex gap-2">
                   {showCalendarDetail ? (
@@ -2887,7 +2905,7 @@ export default function App() {
 
                     return (
                       <>
-                        <div className="grid grid-cols-3 gap-4 shrink-0 bg-slate-50/50 p-2 rounded-[2rem] border border-slate-100 shadow-inner sticky top-0 z-10">
+                        <div className="grid grid-cols-3 gap-4 shrink-0 bg-slate-50/50 p-2 rounded-[2rem] border border-slate-100 shadow-inner sticky top-[72px] z-10">
                           <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm text-center">
                             <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">Stock Atual</p>
                             <p className="text-2xl font-black text-slate-800">{article.available_stock}</p>
@@ -3137,7 +3155,7 @@ export default function App() {
                               {item.quantity}
                             </div>
                             <div className="text-[10px] text-slate-400 font-medium">
-                              {new Date(item.date).toLocaleDateString('pt-PT')} {new Date(item.date).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}
+                              {formatDateDisplay(item.date)} {formatTimeDisplay(item.date)}
                             </div>
                           </div>
                         </div>
@@ -3322,7 +3340,7 @@ export default function App() {
                             <option value="">Escolha uma entrega...</option>
                             {outputs.filter(o => o.items?.some(item => item.quantity_out > item.quantity_in)).map(out => (
                               <option key={out.id} value={out.id}>
-                                #{out.id} - {out.client_name} ({out.location_name}) - {new Date(out.created_at).toLocaleDateString()}
+                                #{out.id} - {out.client_name} ({out.location_name}) - {formatDateDisplay(out.created_at)}
                               </option>
                             ))}
                           </select>
@@ -3452,7 +3470,7 @@ export default function App() {
                           : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
                       }`}
                     >
-                      Ativas
+                      Não Recolhidas
                     </button>
                     <button 
                       onClick={() => setInputStatusFilter('COMPLETED')}
@@ -3462,7 +3480,7 @@ export default function App() {
                           : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
                       }`}
                     >
-                      Efetuadas
+                      Recolhidas
                     </button>
                     <button 
                       onClick={() => setInputStatusFilter('ALL')}
@@ -3550,7 +3568,7 @@ export default function App() {
                                         </span>
                                         <span className="text-xs text-slate-400 font-medium">#{output.id}</span>
                                         <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-50 text-emerald-500 border border-emerald-100">
-                                          Ativa
+                                          NÃO RECOLHIDA
                                         </span>
                                       </div>
                                       <h3 className="text-lg font-bold text-slate-800">{output.client_name}</h3>
@@ -3590,9 +3608,9 @@ export default function App() {
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
                                       <div className="flex flex-col gap-2">
-                                        <p className="text-slate-600 font-medium">
+                                        <p className="text-slate-600 font-medium flex items-baseline gap-2">
                                           {formatDateDisplay(output.delivery_date)}
-                                          {output.delivery_date && output.delivery_date !== UNDEFINED_DATE && <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.delivery_date)}</span>}
+                                          {output.delivery_date && <span className="text-[10px] opacity-70 whitespace-nowrap">{formatTimeDisplay(output.delivery_date)}</span>}
                                         </p>
                                         <Combobox 
                                           value={output.delivery_employee || ''}
@@ -3606,17 +3624,17 @@ export default function App() {
                                     </div>
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
-                                      <p className="text-slate-600 font-medium">
+                                      <p className="text-slate-600 font-medium flex items-baseline gap-2">
                                         {formatDateDisplay(output.assembly_date)}
-                                        {output.assembly_date && output.assembly_date !== UNDEFINED_DATE && <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.assembly_date)}</span>}
+                                        {output.assembly_date && <span className="text-[10px] opacity-70 whitespace-nowrap">{formatTimeDisplay(output.assembly_date)}</span>}
                                       </p>
                                     </div>
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1 text-emerald-500">Recolha</p>
                                       <div className="flex flex-col gap-2">
-                                        <p className="text-emerald-600 font-bold">
+                                        <p className="text-emerald-600 font-bold flex items-baseline gap-2">
                                           {formatDateDisplay(output.collection_date)}
-                                          {output.collection_date && output.collection_date !== UNDEFINED_DATE && <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.collection_date)}</span>}
+                                          {output.collection_date && <span className="text-[10px] opacity-70 whitespace-nowrap">{formatTimeDisplay(output.collection_date)}</span>}
                                         </p>
                                         <Combobox 
                                           value={output.collection_employee || ''}
@@ -3703,7 +3721,7 @@ export default function App() {
                                         </span>
                                         <span className="text-xs text-slate-400 font-medium">#{output?.id || 'N/A'}</span>
                                         <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-50 text-blue-500 border border-blue-100">
-                                          Efetuada
+                                          RECOLHIDA
                                         </span>
                                       </div>
                                       <h3 className="text-lg font-bold text-slate-800">{output?.client_name || 'N/A'}</h3>
@@ -3719,9 +3737,9 @@ export default function App() {
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
                                       <div className="flex flex-col gap-2">
-                                        <p className="text-slate-600 font-medium">
-                                          {output?.delivery_date ? new Date(output.delivery_date).toLocaleDateString() : 'N/A'}
-                                          {output?.delivery_date && <span className="block text-[10px] opacity-70">{new Date(output.delivery_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                        <p className="text-slate-600 font-medium flex items-baseline gap-2">
+                                          {formatDateDisplay(output?.delivery_date)}
+                                          {output?.delivery_date && <span className="text-[10px] opacity-70 whitespace-nowrap">{formatTimeDisplay(output.delivery_date)}</span>}
                                         </p>
                                         {output && (
                                           <Combobox 
@@ -3737,16 +3755,16 @@ export default function App() {
                                     </div>
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
-                                      <p className="text-slate-600 font-medium">
-                                        {output?.assembly_date ? new Date(output.assembly_date).toLocaleDateString() : 'N/A'}
-                                        {output?.assembly_date && <span className="block text-[10px] opacity-70">{new Date(output.assembly_date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>}
+                                      <p className="text-slate-600 font-medium flex items-baseline gap-2">
+                                        {formatDateDisplay(output?.assembly_date)}
+                                        {output?.assembly_date && <span className="text-[10px] opacity-70 whitespace-nowrap">{formatTimeDisplay(output.assembly_date)}</span>}
                                       </p>
                                     </div>
                                     <div>
                                       <p className="uppercase tracking-wider font-semibold mb-1 text-emerald-500">Última Recolha</p>
                                       <div className="flex flex-col gap-2">
                                         <p className="text-emerald-600 font-bold">
-                                          {new Date(group.date).toLocaleDateString()}
+                                          {formatDateDisplay(group.date)}
                                         </p>
                                         {output && (
                                           <Combobox 
@@ -3790,7 +3808,7 @@ export default function App() {
                                                 <div className="flex items-center gap-2 text-[10px] text-slate-400">
                                                   <span>{m.article_code}</span>
                                                   <span>•</span>
-                                                  <span>{new Date(m.date).toLocaleString()}</span>
+                                                  <span>{formatFullDateTime(m.date)}</span>
                                                 </div>
                                               </div>
                                               <div className="flex items-center gap-4">
@@ -4181,7 +4199,15 @@ export default function App() {
                                   min="1"
                                   className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                                   value={selectedQuantity}
-                                  onChange={e => setSelectedQuantity(parseInt(e.target.value) || 1)}
+                                  onFocus={(e) => e.target.select()}
+                                  onChange={e => {
+                                    const val = parseInt(e.target.value);
+                                    if (isNaN(val) || val < 1) {
+                                      setSelectedQuantity(1);
+                                    } else {
+                                      setSelectedQuantity(val);
+                                    }
+                                  }}
                                 />
                               </div>
                               <button 
@@ -4221,26 +4247,22 @@ export default function App() {
                                         <td className="py-4 px-2 text-center">
                                           <input 
                                             type="number"
-                                            min="0"
+                                            min="1"
                                             className="w-20 px-2 py-1 rounded-lg border border-slate-200 text-center font-bold text-red-500 focus:ring-2 focus:ring-a2r-blue-light outline-none"
                                             value={item.quantity_out}
+                                            onFocus={(e) => e.target.select()}
                                             onChange={(e) => {
-                                              const val = parseInt(e.target.value) || 0;
-                                              if (val === 0) {
-                                                if ((item.quantity_in || 0) > 0) {
-                                                  showToast('Não pode eliminar um artigo que já tem recolhas.', 'error');
-                                                  return;
-                                                }
-                                                removeItemFromOutput(item.article_id);
-                                              } else {
-                                                if (val < (item.quantity_in || 0)) {
-                                                  showToast(`A quantidade de entrega não pode ser inferior à quantidade já recolhida (${item.quantity_in}).`, 'error');
-                                                  return;
-                                                }
-                                                const newItems = [...(outputForm.items || [])];
-                                                newItems[idx].quantity_out = val;
-                                                setOutputForm({ ...outputForm, items: newItems });
+                                              const val = parseInt(e.target.value);
+                                              if (isNaN(val) || val < 1) {
+                                                return;
                                               }
+                                              if (val < (item.quantity_in || 0)) {
+                                                showToast(`A quantidade de entrega não pode ser inferior à quantidade já recolhida (${item.quantity_in}).`, 'error');
+                                                return;
+                                              }
+                                              const newItems = [...(outputForm.items || [])];
+                                              newItems[idx].quantity_out = val;
+                                              setOutputForm({ ...outputForm, items: newItems });
                                             }}
                                           />
                                         </td>
@@ -4322,13 +4344,13 @@ export default function App() {
                         onClick={() => setOutputStatusFilter('ACTIVE')}
                         className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'ACTIVE' ? 'bg-emerald-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
                       >
-                        Ativas
+                        Não Recolhidas
                       </button>
                       <button 
                         onClick={() => setOutputStatusFilter('SETTLED')}
                         className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'SETTLED' ? 'bg-blue-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
                       >
-                        Saldadas
+                        Recolhidas
                       </button>
                       <button 
                         onClick={() => setOutputStatusFilter('ALL')}
@@ -4379,11 +4401,11 @@ export default function App() {
                                     <span className="text-xs text-slate-400 font-medium">#{output.id}</span>
                                     {isSettled ? (
                                       <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-50 text-blue-500 border border-blue-100">
-                                        Saldada
+                                        RECOLHIDA
                                       </span>
                                     ) : (
                                       <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-50 text-emerald-500 border border-emerald-100">
-                                        Ativa
+                                        NÃO RECOLHIDA
                                       </span>
                                     )}
                                   </div>
@@ -4448,11 +4470,9 @@ export default function App() {
                                 <div>
                                   <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
                                   <div className="flex flex-col gap-2">
-                                    <p className="text-slate-600 font-medium">
+                                    <p className="text-slate-600 font-medium flex items-baseline gap-2">
                                       {formatDateDisplay(output.delivery_date)}
-                                      {output.delivery_date && output.delivery_date !== UNDEFINED_DATE && (
-                                        <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.delivery_date)}</span>
-                                      )}
+                                      <span className="text-[10px] opacity-70 whitespace-nowrap">{formatTimeDisplay(output.delivery_date)}</span>
                                     </p>
                                     <Combobox 
                                       value={output.delivery_employee || ''}
@@ -4466,21 +4486,17 @@ export default function App() {
                                 </div>
                                 <div>
                                   <p className="uppercase tracking-wider font-semibold mb-1">Montagem</p>
-                                  <p className="text-slate-600 font-medium">
+                                  <p className="text-slate-600 font-medium flex items-baseline gap-2">
                                     {formatDateDisplay(output.assembly_date)}
-                                    {output.assembly_date && output.assembly_date !== UNDEFINED_DATE && (
-                                      <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.assembly_date)}</span>
-                                    )}
+                                    <span className="text-[10px] opacity-70 whitespace-nowrap">{formatTimeDisplay(output.assembly_date)}</span>
                                   </p>
                                 </div>
                                 <div>
                                   <p className="uppercase tracking-wider font-semibold mb-1">Recolha</p>
                                   <div className="flex flex-col gap-2">
-                                    <p className="text-slate-600 font-medium">
+                                    <p className="text-slate-600 font-medium flex items-baseline gap-2">
                                       {formatDateDisplay(output.collection_date)}
-                                      {output.collection_date && output.collection_date !== UNDEFINED_DATE && (
-                                        <span className="block text-[10px] opacity-70">{formatTimeDisplay(output.collection_date)}</span>
-                                      )}
+                                      <span className="text-[10px] opacity-70 whitespace-nowrap">{formatTimeDisplay(output.collection_date)}</span>
                                     </p>
                                     <Combobox 
                                       value={output.collection_employee || ''}
@@ -4645,9 +4661,9 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      {/* Bottom Navigation - Hidden on smartphones */}
+      {/* Bottom Navigation - Fixed at bottom */}
       {user && (
-        <nav className="hidden sm:block bg-white border-t border-slate-200 px-1 py-2 z-10 shrink-0">
+        <nav className="fixed bottom-0 left-0 w-full bg-white border-t border-slate-200 px-1 py-2 z-50 shadow-lg">
           <div className="max-w-lg mx-auto flex items-center justify-between">
             <NavButton 
               active={view === 'menu'} 
@@ -4851,7 +4867,7 @@ export default function App() {
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 50 }}
-            className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border ${
+            className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border ${
               toast.type === 'success' 
                 ? 'bg-emerald-500 text-white border-emerald-400' 
                 : 'bg-red-500 text-white border-red-400'
