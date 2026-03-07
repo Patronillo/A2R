@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Article, Movement, Output, OutputItem, OutputType, Location, Employee } from './types';
+import { User, Article, Movement, StockMovement, Output, OutputItem, OutputType, Location, Employee } from './types';
 import { 
   Package, 
   LogOut, 
@@ -26,7 +26,10 @@ import {
   Calendar,
   User as UserIcon,
   FileText,
-  BarChart3
+  BarChart3,
+  PlusCircle,
+  MinusCircle,
+  UserPlus
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PhotoUpload } from './components/PhotoUpload';
@@ -68,7 +71,7 @@ const isHoliday = (date: Date) => {
   return false;
 };
 
-type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar' | 'position';
+type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar' | 'position' | 'article-stock';
 
 const UNDEFINED_DATE = '9999-12-31T23:59';
 
@@ -256,6 +259,7 @@ export default function App() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [outputs, setOutputs] = useState<Output[]>([]); // Entregas
   const [movements, setMovements] = useState<Movement[]>([]); // Recolhas
+  const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   const [confirmModal, setConfirmModal] = useState<{message: string, onConfirm: () => void} | null>(null);
@@ -299,6 +303,17 @@ export default function App() {
 
   const [showOutputForm, setShowOutputForm] = useState(false);
   const [showInputForm, setShowInputForm] = useState(false);
+  const [showStockEntryForm, setShowStockEntryForm] = useState(false);
+  const [showStockExitForm, setShowStockExitForm] = useState(false);
+  const [selectedStockArticle, setSelectedStockArticle] = useState<Article | null>(null);
+  const [stockForm, setStockForm] = useState({
+    document_number: '',
+    date: new Date().toISOString().split('T')[0],
+    quantity: 0,
+    observations: ''
+  });
+  const [stockFilter, setStockFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
+  const [stockStartDate, setStockStartDate] = useState('2026-01-01');
   const [outputSearch, setOutputSearch] = useState('');
   const [outputStatusFilter, setOutputStatusFilter] = useState<'ALL' | 'ACTIVE' | 'SETTLED'>('ACTIVE');
   const [outputStartDate, setOutputStartDate] = useState('2026-01-01');
@@ -356,6 +371,16 @@ export default function App() {
     window.scrollTo(0, 0);
   }, [view]);
 
+  const fetchStockMovements = async () => {
+    try {
+      const res = await fetch('/api/stock-movements');
+      const data = await res.json();
+      setStockMovements(data);
+    } catch (e) {
+      console.error('Error fetching stock movements:', e);
+    }
+  };
+
   useEffect(() => {
     if (user) {
       fetchArticles();
@@ -363,6 +388,7 @@ export default function App() {
       fetchEmployees();
       fetchOutputs();
       fetchMovements();
+      fetchStockMovements();
     }
   }, [user, view]);
 
@@ -399,6 +425,121 @@ export default function App() {
     const res = await fetch('/api/movements');
     const data = await res.json();
     setMovements(data);
+  };
+
+  const handleStockMovement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedStockArticle || !user) return;
+
+    setLoading(true);
+    try {
+      const response = await fetch('/api/stock-movements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          article_id: selectedStockArticle.id,
+          user_id: user.id,
+          type: showStockEntryForm ? 'IN' : 'OUT',
+          quantity: stockForm.quantity,
+          date: stockForm.date,
+          document_number: stockForm.document_number,
+          observations: stockForm.observations
+        })
+      });
+
+      if (response.ok) {
+        showToast('Movimento registado com sucesso!');
+        setShowStockEntryForm(false);
+        setShowStockExitForm(false);
+        setStockForm({
+          document_number: '',
+          date: new Date().toISOString().split('T')[0],
+          quantity: 0,
+          observations: ''
+        });
+        fetchArticles();
+        fetchStockMovements();
+      } else {
+        const data = await response.json();
+        showToast(data.error || 'Erro ao registar movimento', 'error');
+      }
+    } catch (e) {
+      showToast('Erro de conexão', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteStockMovement = async (id: number) => {
+    setConfirmModal({
+      message: 'Tem a certeza que deseja eliminar este movimento? O stock será revertido.',
+      onConfirm: async () => {
+        setConfirmModal(null);
+        setLoading(true);
+        try {
+          const response = await fetch(`/api/stock-movements/${id}`, {
+            method: 'DELETE'
+          });
+
+          if (response.ok) {
+            showToast('Movimento eliminado com sucesso!');
+            fetchArticles();
+            fetchStockMovements();
+          } else {
+            const data = await response.json();
+            showToast(data.error || 'Erro ao eliminar movimento', 'error');
+          }
+        } catch (e) {
+          showToast('Erro de conexão', 'error');
+        } finally {
+          setLoading(false);
+        }
+      }
+    });
+  };
+
+  const generateStockMovementsReport = async () => {
+    const { jsPDF } = await import('jspdf');
+    const autoTable = (await import('jspdf-autotable')).default;
+    
+    const doc = new jsPDF();
+    
+    // Header
+    doc.setFontSize(20);
+    doc.setTextColor(15, 23, 42); // slate-900
+    doc.text('Relatório de Movimentos de Stock', 14, 22);
+    
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139); // slate-500
+    doc.text(`Gerado em: ${new Date().toLocaleString('pt-PT')}`, 14, 30);
+    doc.text(`Filtro: ${stockFilter === 'ALL' ? 'Todos' : stockFilter === 'IN' ? 'Entradas' : 'Saídas'}`, 14, 35);
+    doc.text(`Desde: ${formatDateDisplay(stockStartDate)}`, 14, 40);
+
+    const filteredMovements = stockMovements.filter(m => {
+      const matchesType = stockFilter === 'ALL' || m.type === stockFilter;
+      const matchesDate = m.date >= stockStartDate;
+      return matchesType && matchesDate;
+    });
+
+    const tableData = filteredMovements.map(m => [
+      formatDateDisplay(m.date),
+      m.article_description || '',
+      m.type === 'IN' ? 'ENTRADA' : 'SAÍDA',
+      m.quantity.toString(),
+      m.document_number || '-',
+      m.observations || '-'
+    ]);
+
+    autoTable(doc, {
+      startY: 45,
+      head: [['Data', 'Artigo', 'Tipo', 'Qtd', 'Doc/Fatura', 'Observações']],
+      body: tableData,
+      headStyles: { fillColor: [15, 23, 42], textColor: 255 },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { top: 45 },
+    });
+
+    doc.save(`relatorio-stock-${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
   const handleLogin = async (e?: React.FormEvent) => {
@@ -1255,10 +1396,8 @@ export default function App() {
         <div className="absolute top-6 right-6">
           <button 
             onClick={() => {
-              if (window.confirm('Deseja realmente sair e fechar a aplicação?')) {
-                window.close();
-                window.location.href = "about:blank";
-              }
+              window.close();
+              window.location.href = "about:blank";
             }} 
             className="p-3 bg-red-50 text-red-600 rounded-xl font-bold hover:bg-red-100 transition-all shadow-sm"
             title="Sair"
@@ -1713,7 +1852,8 @@ export default function App() {
                     const search = articleSearch.toLowerCase();
                     return a.code.toLowerCase().includes(search) || 
                            a.description.toLowerCase().includes(search) ||
-                           `${a.height}x${a.width}x${a.length}`.includes(search);
+                           `${a.height}x${a.width}x${a.length}`.includes(search) ||
+                           (a.weight && a.weight.toString().includes(search));
                   })
                   .map(article => (
                   <div 
@@ -1733,6 +1873,18 @@ export default function App() {
                         </div>
                       )}
                     </div>
+
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setArticleSearchQuery(article.description);
+                        setShowArticleSearchModal(true);
+                      }}
+                      className="p-2 bg-slate-50 text-slate-400 hover:text-a2r-blue-dark hover:bg-blue-50 rounded-xl transition-all flex-shrink-0"
+                      title="Pesquisa Avançada"
+                    >
+                      <Search size={20} />
+                    </button>
                     
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-0.5">
@@ -1742,18 +1894,49 @@ export default function App() {
                         <h3 className="font-bold text-slate-800 line-clamp-1">{article.description}</h3>
                       </div>
                       <div className="text-[11px] text-slate-400">
-                        Dim: {article.height}x{article.width}x{article.length}cm
+                        Dim: {article.height}x{article.width}x{article.length}cm {article.weight ? `| Peso: ${article.weight}kg` : ''}
                       </div>
                     </div>
 
                     <div className="text-right flex flex-col items-end gap-2">
                       <div className="text-right leading-tight">
-                        <p className="text-[10px] text-slate-400 font-medium">Stock Inicial: {article.initial_stock}</p>
+                        <p className="text-[10px] text-slate-400 font-medium">Stock Total: {article.total_stock}</p>
                         <p className={`text-sm font-bold ${article.available_stock > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                           {article.available_stock} Disponível
                         </p>
                       </div>
-                      <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+                      <div className="flex gap-1" onClick={e => e.stopPropagation()}>
+                        <button 
+                          onClick={() => {
+                            setSelectedStockArticle(article);
+                            setShowStockEntryForm(true);
+                          }}
+                          className="p-1.5 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-all"
+                          title="Entrada de Stock"
+                        >
+                          <PlusCircle size={18} />
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setSelectedStockArticle(article);
+                            setShowStockExitForm(true);
+                          }}
+                          className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                          title="Saída de Stock"
+                        >
+                          <MinusCircle size={18} />
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setSelectedStockArticle(article);
+                            setStockFilter('ALL');
+                            setView('article-stock');
+                          }}
+                          className="p-1.5 text-a2r-blue-dark hover:bg-blue-50 rounded-lg transition-all"
+                          title="Movimentos de Stock"
+                        >
+                          <History size={18} />
+                        </button>
                         <button 
                           onClick={() => confirmDeleteArticle(article.id)}
                           className="p-1.5 rounded-lg bg-slate-50 text-slate-400 hover:text-red-500 transition-all"
@@ -1790,14 +1973,14 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Stock Inicial</label>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Stock Total</label>
                       <input 
                         type="number" 
                         required
                         min="0"
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                        value={editingArticle.initial_stock ?? ''}
-                        onChange={e => setEditingArticle({...editingArticle, initial_stock: parseInt(e.target.value) || 0})}
+                        value={editingArticle.total_stock ?? ''}
+                        onChange={e => setEditingArticle({...editingArticle, total_stock: parseInt(e.target.value) || 0})}
                       />
                     </div>
                     <div>
@@ -1820,7 +2003,7 @@ export default function App() {
                       onChange={e => setEditingArticle({...editingArticle, description: e.target.value})}
                     />
                   </div>
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-4 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Altura (cm)</label>
                       <input 
@@ -1849,6 +2032,16 @@ export default function App() {
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                         value={editingArticle.length ?? ''}
                         onChange={e => setEditingArticle({...editingArticle, length: parseFloat(e.target.value) || 0})}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Peso (kg)</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                        value={editingArticle.weight ?? ''}
+                        onChange={e => setEditingArticle({...editingArticle, weight: parseFloat(e.target.value) || 0})}
                       />
                     </div>
                   </div>
@@ -3438,8 +3631,8 @@ export default function App() {
                 </div>
               ) : (
                 <div className="flex flex-col h-full space-y-6 overflow-hidden">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 shrink-0">
-                    <div className="relative">
+                  <div className="flex flex-col md:flex-row gap-4 shrink-0 items-start md:items-center">
+                    <div className="relative flex-1 w-full">
                       <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
                       <input 
                         type="text" 
@@ -3450,48 +3643,50 @@ export default function App() {
                         onChange={e => setInputSearch(e.target.value)}
                       />
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-slate-500 whitespace-nowrap">Desde:</span>
-                      <input 
-                        type="date" 
-                        className="flex-1 px-4 py-2 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
-                        value={inputStartDate}
-                        onChange={e => setInputStartDate(e.target.value)}
-                      />
-                    </div>
-                  </div>
+                    <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-slate-500 whitespace-nowrap">Desde:</span>
+                        <input 
+                          type="date" 
+                          className="px-4 py-2 rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                          value={inputStartDate}
+                          onChange={e => setInputStartDate(e.target.value)}
+                        />
+                      </div>
 
-                  <div className="flex gap-2 shrink-0 overflow-x-auto pb-2">
-                    <button 
-                      onClick={() => setInputStatusFilter('ACTIVE')}
-                      className={`px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${
-                        inputStatusFilter === 'ACTIVE' 
-                          ? 'bg-emerald-500 text-white shadow-md' 
-                          : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
-                      }`}
-                    >
-                      Não Recolhidas
-                    </button>
-                    <button 
-                      onClick={() => setInputStatusFilter('COMPLETED')}
-                      className={`px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${
-                        inputStatusFilter === 'COMPLETED' 
-                          ? 'bg-emerald-500 text-white shadow-md' 
-                          : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
-                      }`}
-                    >
-                      Recolhidas
-                    </button>
-                    <button 
-                      onClick={() => setInputStatusFilter('ALL')}
-                      className={`px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${
-                        inputStatusFilter === 'ALL' 
-                          ? 'bg-emerald-500 text-white shadow-md' 
-                          : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
-                      }`}
-                    >
-                      Todas
-                    </button>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => setInputStatusFilter('ACTIVE')}
+                          className={`px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${
+                            inputStatusFilter === 'ACTIVE' 
+                              ? 'bg-emerald-500 text-white shadow-md' 
+                              : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
+                          }`}
+                        >
+                          Não Recolhidas
+                        </button>
+                        <button 
+                          onClick={() => setInputStatusFilter('COMPLETED')}
+                          className={`px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${
+                            inputStatusFilter === 'COMPLETED' 
+                              ? 'bg-emerald-500 text-white shadow-md' 
+                              : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
+                          }`}
+                        >
+                          Recolhidas
+                        </button>
+                        <button 
+                          onClick={() => setInputStatusFilter('ALL')}
+                          className={`px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${
+                            inputStatusFilter === 'ALL' 
+                              ? 'bg-emerald-500 text-white shadow-md' 
+                              : 'bg-white text-slate-500 border border-slate-100 hover:bg-slate-50'
+                          }`}
+                        >
+                          Todas
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
@@ -4318,8 +4513,8 @@ export default function App() {
                 </div>
               ) : (
                 <div className="flex flex-col h-full space-y-6 overflow-hidden">
-                  <div className="flex flex-col md:flex-row gap-4 shrink-0">
-                    <div className="relative flex-1">
+                  <div className="flex flex-col md:flex-row gap-4 shrink-0 items-start md:items-center">
+                    <div className="relative flex-1 w-full">
                       <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                       <input 
                         type="text" 
@@ -4330,34 +4525,36 @@ export default function App() {
                         onChange={e => setOutputSearch(e.target.value)}
                       />
                     </div>
-                    <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
-                      <span className="text-sm font-medium text-slate-500 whitespace-nowrap">Desde:</span>
-                      <input 
-                        type="date" 
-                        className="px-2 py-1 rounded-lg border border-slate-200 bg-white focus:ring-2 focus:ring-a2r-blue-light outline-none text-sm"
-                        value={outputStartDate}
-                        onChange={e => setOutputStartDate(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex bg-white p-1 rounded-2xl border border-slate-100 shadow-sm">
-                      <button 
-                        onClick={() => setOutputStatusFilter('ACTIVE')}
-                        className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'ACTIVE' ? 'bg-emerald-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
-                      >
-                        Não Recolhidas
-                      </button>
-                      <button 
-                        onClick={() => setOutputStatusFilter('SETTLED')}
-                        className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'SETTLED' ? 'bg-blue-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
-                      >
-                        Recolhidas
-                      </button>
-                      <button 
-                        onClick={() => setOutputStatusFilter('ALL')}
-                        className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'ALL' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
-                      >
-                        Todas
-                      </button>
+                    <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
+                      <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
+                        <span className="text-sm font-medium text-slate-500 whitespace-nowrap">Desde:</span>
+                        <input 
+                          type="date" 
+                          className="px-2 py-1 rounded-lg border border-slate-200 bg-white focus:ring-2 focus:ring-a2r-blue-light outline-none text-sm"
+                          value={outputStartDate}
+                          onChange={e => setOutputStartDate(e.target.value)}
+                        />
+                      </div>
+                      <div className="flex bg-white p-1 rounded-2xl border border-slate-100 shadow-sm">
+                        <button 
+                          onClick={() => setOutputStatusFilter('ACTIVE')}
+                          className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'ACTIVE' ? 'bg-emerald-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+                        >
+                          Não Recolhidas
+                        </button>
+                        <button 
+                          onClick={() => setOutputStatusFilter('SETTLED')}
+                          className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'SETTLED' ? 'bg-blue-500 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+                        >
+                          Recolhidas
+                        </button>
+                        <button 
+                          onClick={() => setOutputStatusFilter('ALL')}
+                          className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${outputStatusFilter === 'ALL' ? 'bg-slate-800 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}
+                        >
+                          Todas
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -4386,7 +4583,7 @@ export default function App() {
 
                         return (
                           <div key={output.id} className="bg-white rounded-3xl border border-slate-100 shadow-lg hover:shadow-xl transition-all overflow-hidden">
-                            <div className="p-6">
+                            <div className="p-4">
                               <div className="flex justify-between items-start">
                                 <div className="flex-1">
                                   <div className="flex items-center gap-2 mb-1">
@@ -4466,7 +4663,7 @@ export default function App() {
                                 </div>
                               </div>
                               
-                              <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-slate-400">
+                              <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-slate-400">
                                 <div>
                                   <p className="uppercase tracking-wider font-semibold mb-1">Entrega</p>
                                   <div className="flex flex-col gap-2">
@@ -4530,14 +4727,14 @@ export default function App() {
                                   exit={{ height: 0, opacity: 0 }}
                                   className="bg-slate-50 border-t border-slate-100"
                                 >
-                                  <div className="p-6 space-y-3">
+                                  <div className="p-4 space-y-3">
                                     <div className="grid grid-cols-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2">
                                       <div className="col-span-2">Artigo</div>
                                       <div className="text-center">Entrega</div>
                                       <div className="text-center">Recolha</div>
                                     </div>
                                     {output.items?.map(item => (
-                                      <div key={item.id} className="grid grid-cols-4 items-center bg-white p-3 rounded-xl border border-slate-100 text-sm">
+                                      <div key={item.id} className="grid grid-cols-4 items-center bg-white p-2 rounded-xl border border-slate-100 text-sm">
                                         <div className="col-span-2">
                                           <p className="font-bold text-slate-800">{item.article_description}</p>
                                           <p className="text-[10px] text-slate-400">{item.article_code}</p>
@@ -4581,14 +4778,14 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Stock Inicial</label>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Stock Total</label>
                       <input 
                         type="number" 
                         required
                         min="0"
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                        value={newArticle.initial_stock || ''}
-                        onChange={e => setNewArticle({...newArticle, initial_stock: parseInt(e.target.value)})}
+                        value={newArticle.total_stock || ''}
+                        onChange={e => setNewArticle({...newArticle, total_stock: parseInt(e.target.value)})}
                       />
                     </div>
                   </div>
@@ -4602,7 +4799,7 @@ export default function App() {
                       onChange={e => setNewArticle({...newArticle, description: e.target.value})}
                     />
                   </div>
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-4 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Altura (cm)</label>
                       <input 
@@ -4631,6 +4828,16 @@ export default function App() {
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                         value={newArticle.length || ''}
                         onChange={e => setNewArticle({...newArticle, length: parseFloat(e.target.value)})}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Peso (kg)</label>
+                      <input 
+                        type="number" 
+                        step="0.01"
+                        className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                        value={newArticle.weight || ''}
+                        onChange={e => setNewArticle({...newArticle, weight: parseFloat(e.target.value)})}
                       />
                     </div>
                   </div>
@@ -4859,6 +5066,229 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+          {view === 'article-stock' && (
+            <motion.div
+              key="article-stock"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="flex flex-col h-full space-y-6"
+            >
+              <div className="flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-4">
+                  <button 
+                    onClick={() => setView('articles')}
+                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <ChevronDown className="rotate-90" size={24} />
+                  </button>
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800">Movimentos de Stock</h2>
+                    {selectedStockArticle && (
+                      <p className="text-sm text-slate-500 font-medium">
+                        {selectedStockArticle.code} - {selectedStockArticle.description}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={generateStockMovementsReport}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition-all"
+                  >
+                    <FileText size={18} />
+                    Relatório PDF
+                  </button>
+                  <button 
+                    onClick={() => setView('menu')}
+                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col md:flex-row gap-4 shrink-0 bg-white p-4 rounded-3xl border border-slate-100 shadow-sm">
+                <div className="flex-1">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">Tipo</label>
+                  <div className="flex bg-slate-100 p-1 rounded-xl">
+                    {(['ALL', 'IN', 'OUT'] as const).map(type => (
+                      <button
+                        key={type}
+                        onClick={() => setStockFilter(type)}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                          stockFilter === type ? 'bg-white text-a2r-blue-dark shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                      >
+                        {type === 'ALL' ? 'Todos' : type === 'IN' ? 'Entradas' : 'Saídas'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="w-full md:w-48">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">Desde</label>
+                  <input 
+                    type="date" 
+                    className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light text-sm"
+                    value={stockStartDate}
+                    onChange={e => setStockStartDate(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+                {stockMovements
+                  .filter(m => {
+                    const matchesArticle = !selectedStockArticle || m.article_id === selectedStockArticle.id;
+                    const matchesType = stockFilter === 'ALL' || m.type === stockFilter;
+                    const matchesDate = m.date >= stockStartDate;
+                    return matchesArticle && matchesType && matchesDate;
+                  })
+                  .map(movement => (
+                    <div key={movement.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-4">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                          movement.type === 'IN' ? 'bg-emerald-50 text-emerald-500' : 'bg-red-50 text-red-500'
+                        }`}>
+                          {movement.type === 'IN' ? <PlusCircle size={20} /> : <MinusCircle size={20} />}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-slate-400">{formatDateDisplay(movement.date)}</span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              movement.type === 'IN' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'
+                            }`}>
+                              {movement.type === 'IN' ? 'Entrada' : 'Saída'}
+                            </span>
+                            {movement.document_number && (
+                              <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                                Doc: {movement.document_number}
+                              </span>
+                            )}
+                          </div>
+                          <p className="font-bold text-slate-800">{movement.article_description}</p>
+                          {movement.observations && (
+                            <p className="text-xs text-slate-500 mt-0.5 italic">"{movement.observations}"</p>
+                          )}
+                          <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                            <UserPlus size={10} /> {movement.user_name}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-lg font-black ${movement.type === 'IN' ? 'text-emerald-500' : 'text-red-500'}`}>
+                          {movement.type === 'IN' ? '+' : '-'}{movement.quantity}
+                        </p>
+                        <button 
+                          onClick={() => handleDeleteStockMovement(movement.id)}
+                          className="p-1.5 text-slate-300 hover:text-red-500 transition-all"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                
+                {stockMovements.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                    <History size={48} className="mb-4 opacity-20" />
+                    <p className="font-medium">Nenhum movimento encontrado</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {/* Stock Entry/Exit Modals */}
+          <AnimatePresence>
+            {(showStockEntryForm || showStockExitForm) && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden"
+                >
+                  <div className={`p-6 text-white flex justify-between items-center ${showStockEntryForm ? 'bg-emerald-500' : 'bg-red-500'}`}>
+                    <h3 className="text-xl font-bold flex items-center gap-2">
+                      {showStockEntryForm ? <PlusCircle /> : <MinusCircle />}
+                      {showStockEntryForm ? 'Entrada de Stock' : 'Saída de Stock'}
+                    </h3>
+                    <button onClick={() => { setShowStockEntryForm(false); setShowStockExitForm(false); }} className="p-1 hover:bg-white/20 rounded-lg transition-all">
+                      <X size={24} />
+                    </button>
+                  </div>
+                  
+                  <form onSubmit={handleStockMovement} className="p-6 space-y-4">
+                    {selectedStockArticle && (
+                      <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 mb-4">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Artigo Selecionado</p>
+                        <p className="font-bold text-slate-800">{selectedStockArticle.code} - {selectedStockArticle.description}</p>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Data</label>
+                        <input 
+                          type="date" 
+                          required
+                          className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                          value={stockForm.date}
+                          onChange={e => setStockForm({...stockForm, date: e.target.value})}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Quantidade</label>
+                        <input 
+                          type="number" 
+                          required
+                          min="1"
+                          className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                          value={stockForm.quantity || ''}
+                          onChange={e => setStockForm({...stockForm, quantity: parseInt(e.target.value) || 0})}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">
+                        {showStockEntryForm ? 'Nº Fatura' : 'Nº Documento'}
+                      </label>
+                      <input 
+                        type="text" 
+                        className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                        placeholder={showStockEntryForm ? 'Ex: FAT/2024/001' : 'Ex: DOC/001'}
+                        value={stockForm.document_number}
+                        onChange={e => setStockForm({...stockForm, document_number: e.target.value})}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Observações / Justificação</label>
+                      <textarea 
+                        className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light h-24 resize-none"
+                        placeholder={showStockEntryForm ? 'Ex: Compra de material novo...' : 'Ex: Material estragado / partido / venda...'}
+                        value={stockForm.observations}
+                        onChange={e => setStockForm({...stockForm, observations: e.target.value})}
+                      />
+                    </div>
+
+                    <button 
+                      type="submit"
+                      disabled={loading}
+                      className={`w-full py-3 rounded-xl text-white font-bold shadow-lg transition-all flex items-center justify-center gap-2 ${
+                        showStockEntryForm ? 'bg-emerald-500 shadow-emerald-200 hover:bg-emerald-600' : 'bg-red-500 shadow-red-200 hover:bg-red-600'
+                      }`}
+                    >
+                      {loading ? 'A processar...' : 'Confirmar Registo'}
+                    </button>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
 
       {/* Toast Notification */}
       <AnimatePresence>

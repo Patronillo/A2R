@@ -10,12 +10,27 @@ export interface Article {
   id: number;
   code: string;
   description: string;
-  initial_stock: number;
+  total_stock: number;
   available_stock: number;
   height: number;
   width: number;
   length: number;
+  weight: number;
   photo: string | null;
+}
+
+export interface StockMovement {
+  id: number;
+  article_id: number;
+  user_id: number;
+  type: 'IN' | 'OUT';
+  quantity: number;
+  date: string;
+  document_number: string; // Nº Fatura or Nº Documento
+  observations: string;
+  article_description?: string;
+  article_code?: string;
+  user_name?: string;
 }
 
 export interface Movement {

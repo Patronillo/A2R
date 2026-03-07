@@ -41,27 +41,41 @@ async function ensureSchema() {
         id SERIAL PRIMARY KEY,
         code TEXT UNIQUE NOT NULL,
         description TEXT NOT NULL,
-        initial_stock INTEGER DEFAULT 0,
+        total_stock INTEGER DEFAULT 0,
         available_stock INTEGER DEFAULT 0,
         height FLOAT,
         width FLOAT,
         length FLOAT,
+        weight FLOAT,
         photo TEXT
       )
     `;
 
-    // Movements table
+    // Add weight column if it doesn't exist
+    try {
+      await sql`ALTER TABLE articles ADD COLUMN IF NOT EXISTS weight FLOAT`;
+    } catch (e) {
+      // Column might already exist
+    }
+
+    // Rename initial_stock to total_stock if it exists
+    try {
+      await sql`ALTER TABLE articles RENAME COLUMN initial_stock TO total_stock`;
+    } catch (e) {
+      // Column might already be renamed or table is new
+    }
+
+    // Stock Movements table
     await sql`
-      CREATE TABLE IF NOT EXISTS movements (
+      CREATE TABLE IF NOT EXISTS stock_movements (
         id SERIAL PRIMARY KEY,
         article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         type TEXT CHECK(type IN ('IN', 'OUT')) NOT NULL,
         quantity INTEGER NOT NULL,
         date TIMESTAMP NOT NULL,
-        observations TEXT,
-        destination TEXT,
-        related_movement_id INTEGER
+        document_number TEXT,
+        observations TEXT
       )
     `;
 
@@ -271,11 +285,11 @@ app.get("/api/articles", async (req, res) => {
 });
 
 app.post("/api/articles", async (req, res) => {
-  const { code, description, initial_stock, height, width, length, photo } = req.body;
+  const { code, description, total_stock, height, width, length, weight, photo } = req.body;
   try {
     const { rows } = await sql`
-      INSERT INTO articles (code, description, initial_stock, available_stock, height, width, length, photo)
-      VALUES (${code}, ${description}, ${initial_stock}, ${initial_stock}, ${height}, ${width}, ${length}, ${photo})
+      INSERT INTO articles (code, description, total_stock, available_stock, height, width, length, weight, photo)
+      VALUES (${code}, ${description}, ${total_stock}, ${total_stock}, ${height}, ${width}, ${length}, ${weight}, ${photo})
       RETURNING id
     `;
     res.json({ id: rows[0].id });
@@ -286,19 +300,19 @@ app.post("/api/articles", async (req, res) => {
 
 app.put("/api/articles/:id", async (req, res) => {
   const { id } = req.params;
-  const { code, description, initial_stock, height, width, length, photo } = req.body;
+  const { code, description, total_stock, height, width, length, weight, photo } = req.body;
   
   try {
     const { rows } = await sql`SELECT * FROM articles WHERE id = ${id}`;
     if (rows.length === 0) return res.status(404).json({ error: "Artigo não encontrado" });
 
     const article = rows[0];
-    const diff = initial_stock - article.initial_stock;
+    const diff = total_stock - article.total_stock;
     const newAvailable = article.available_stock + diff;
 
     await sql`
       UPDATE articles 
-      SET code = ${code}, description = ${description}, initial_stock = ${initial_stock}, available_stock = ${newAvailable}, height = ${height}, width = ${width}, length = ${length}, photo = ${photo}
+      SET code = ${code}, description = ${description}, total_stock = ${total_stock}, available_stock = ${newAvailable}, height = ${height}, width = ${width}, length = ${length}, weight = ${weight}, photo = ${photo}
       WHERE id = ${id}
     `;
     res.json({ success: true });
@@ -745,6 +759,69 @@ app.post("/api/movements", async (req, res) => {
     `;
 
     res.json({ success: true, id: movementRows[0].id });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Stock Movements Endpoints
+app.get("/api/stock-movements", async (req, res) => {
+  try {
+    const { rows } = await sql`
+      SELECT sm.*, a.description as article_description, a.code as article_code, u.name as user_name
+      FROM stock_movements sm
+      JOIN articles a ON sm.article_id = a.id
+      JOIN users u ON sm.user_id = u.id
+      ORDER BY sm.date DESC
+    `;
+    res.json(rows);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/stock-movements", async (req, res) => {
+  const { article_id, user_id, type, quantity, date, document_number, observations } = req.body;
+  try {
+    const qty = Number(quantity);
+    const stockChange = type === 'IN' ? qty : -qty;
+
+    await sql`
+      UPDATE articles 
+      SET total_stock = total_stock + ${stockChange}, 
+          available_stock = available_stock + ${stockChange} 
+      WHERE id = ${article_id}
+    `;
+
+    const { rows } = await sql`
+      INSERT INTO stock_movements (article_id, user_id, type, quantity, date, document_number, observations)
+      VALUES (${article_id}, ${user_id}, ${type}, ${qty}, ${date}, ${document_number}, ${observations})
+      RETURNING id
+    `;
+    res.json({ id: rows[0].id });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/stock-movements/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { rows: smRows } = await sql`SELECT * FROM stock_movements WHERE id = ${id}`;
+    if (smRows.length === 0) return res.status(404).json({ error: "Movimento não encontrado" });
+
+    const sm = smRows[0];
+    const stockChange = sm.type === 'IN' ? -sm.quantity : sm.quantity;
+
+    await sql`
+      UPDATE articles 
+      SET total_stock = total_stock + ${stockChange}, 
+          available_stock = available_stock + ${stockChange} 
+      WHERE id = ${sm.article_id}
+    `;
+
+    await sql`DELETE FROM stock_movements WHERE id = ${id}`;
+    res.json({ success: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
