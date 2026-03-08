@@ -29,7 +29,8 @@ import {
   BarChart3,
   PlusCircle,
   MinusCircle,
-  UserPlus
+  UserPlus,
+  Database
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PhotoUpload } from './components/PhotoUpload';
@@ -346,6 +347,36 @@ export default function App() {
     }
   }, [showOutputForm]);
 
+  useEffect(() => {
+    const isFixedView = ['outputs', 'inputs', 'articles', 'article-stock'].includes(view) && !showOutputForm && !showInputForm;
+    if (isFixedView) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'unset';
+    }
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, [view, showOutputForm, showInputForm]);
+
+  const [dbSize, setDbSize] = useState<string>('...');
+
+  const fetchDbSize = async () => {
+    try {
+      const res = await fetch('/api/stats/db-size');
+      const data = await res.json();
+      setDbSize(data.size || '0 B');
+    } catch (e) {
+      console.error('Error fetching DB size:', e);
+    }
+  };
+
+  useEffect(() => {
+    if (view === 'menu') {
+      fetchDbSize();
+    }
+  }, [view]);
+
   // Handle browser back button
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
@@ -507,7 +538,12 @@ export default function App() {
     // Header
     doc.setFontSize(20);
     doc.setTextColor(15, 23, 42); // slate-900
-    doc.text('Relatório de Movimentos de Stock', 14, 22);
+    
+    const title = selectedStockArticle 
+      ? `Movimentos ${selectedStockArticle.description}` 
+      : 'Movimentos Globais';
+    
+    doc.text(title, 14, 22);
     
     doc.setFontSize(10);
     doc.setTextColor(100, 116, 139); // slate-500
@@ -516,9 +552,10 @@ export default function App() {
     doc.text(`Desde: ${formatDateDisplay(stockStartDate)}`, 14, 40);
 
     const filteredMovements = stockMovements.filter(m => {
+      const matchesArticle = !selectedStockArticle || m.article_id === selectedStockArticle.id;
       const matchesType = stockFilter === 'ALL' || m.type === stockFilter;
       const matchesDate = m.date >= stockStartDate;
-      return matchesType && matchesDate;
+      return matchesArticle && matchesType && matchesDate;
     });
 
     const tableData = filteredMovements.map(m => [
@@ -539,7 +576,48 @@ export default function App() {
       margin: { top: 45 },
     });
 
-    doc.save(`relatorio-stock-${new Date().toISOString().split('T')[0]}.pdf`);
+    const fileName = selectedStockArticle 
+      ? `movimentos-${selectedStockArticle.code}-${new Date().toISOString().split('T')[0]}.pdf`
+      : `movimentos-globais-${new Date().toISOString().split('T')[0]}.pdf`;
+
+    doc.save(fileName);
+  };
+
+  const generateArticlesReport = async () => {
+    const { jsPDF } = await import('jspdf');
+    const autoTable = (await import('jspdf-autotable')).default;
+    
+    const doc = new jsPDF();
+    
+    // Header
+    doc.setFontSize(20);
+    doc.setTextColor(15, 23, 42); // slate-900
+    doc.text('Inventário Geral de Artigos', 14, 22);
+    
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139); // slate-500
+    doc.text(`Gerado em: ${new Date().toLocaleString('pt-PT')}`, 14, 30);
+    doc.text(`Total de Artigos: ${articles.length}`, 14, 35);
+
+    const tableData = articles.map(a => [
+      a.code,
+      a.description,
+      a.total_stock.toString(),
+      a.available_stock.toString(),
+      `${a.height}x${a.width}x${a.length}`,
+      a.weight.toString()
+    ]);
+
+    autoTable(doc, {
+      startY: 40,
+      head: [['Código', 'Descrição', 'Stock Total', 'Disponível', 'Dimensões', 'Peso (kg)']],
+      body: tableData,
+      headStyles: { fillColor: [15, 23, 42], textColor: 255 },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { top: 40 },
+    });
+
+    doc.save(`inventario-artigos-${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
   const handleLogin = async (e?: React.FormEvent) => {
@@ -592,7 +670,11 @@ export default function App() {
       const res = await fetch('/api/articles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newArticle)
+        body: JSON.stringify({
+          ...newArticle,
+          total_stock: 0, // Ensure it's always 0 on creation
+          available_stock: 0
+        })
       });
       if (res.ok) {
         await fetchArticles();
@@ -602,6 +684,25 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const openAddArticle = () => {
+    const maxCode = articles.reduce((max, art) => {
+      const codeNum = parseInt(art.code);
+      return !isNaN(codeNum) ? Math.max(max, codeNum) : max;
+    }, 0);
+    const nextCode = (maxCode + 1).toString().padStart(4, '0');
+    setNewArticle({
+      code: nextCode,
+      total_stock: 0,
+      available_stock: 0,
+      description: '',
+      height: 0,
+      width: 0,
+      length: 0,
+      weight: 0
+    });
+    setView('add-article');
   };
 
   const handleEditArticle = async (e: React.FormEvent) => {
@@ -1686,7 +1787,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`max-w-5xl w-full mx-auto p-6 pt-24 pb-24 ${['outputs', 'inputs'].includes(view) && !showOutputForm && !showInputForm ? 'h-screen overflow-hidden' : ''}`}>
+      <main className={`max-w-5xl w-full mx-auto p-6 pt-24 pb-24 ${['outputs', 'inputs', 'articles', 'article-stock', 'history', 'calendar', 'position'].includes(view) && !showOutputForm && !showInputForm ? 'h-screen overflow-hidden flex flex-col' : ''}`}>
         <AnimatePresence mode="wait">
           {view === 'menu' && (
             <motion.div
@@ -1785,7 +1886,7 @@ export default function App() {
 
                 {/* Full Width Stats/History Link */}
                 <button
-                  onClick={() => setView('history')}
+                  onClick={() => { setSelectedStockArticle(null); setView('history'); }}
                   className="sm:col-span-2 md:col-span-3 flex items-center justify-between p-5 md:p-8 a2r-gradient rounded-3xl md:rounded-[2.5rem] shadow-xl hover:opacity-95 transition-all group"
                 >
                   <div className="flex items-center gap-3 md:gap-6">
@@ -1802,6 +1903,14 @@ export default function App() {
                   </div>
                 </button>
               </div>
+
+              <div className="mt-8 pt-8 border-t border-slate-100 flex justify-center">
+                <div className="px-4 py-2 bg-slate-50 rounded-full flex items-center gap-3 border border-slate-100">
+                  <Database size={14} className="text-slate-400" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Database Size:</span>
+                  <span className="text-[10px] font-black text-slate-600">{dbSize}</span>
+                </div>
+              </div>
             </motion.div>
           )}
 
@@ -1811,13 +1920,20 @@ export default function App() {
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="flex flex-col h-full space-y-6"
+              className="flex flex-col flex-1 min-h-0 space-y-6"
             >
               <div className="flex items-center justify-between shrink-0">
                 <h2 className="text-2xl font-bold text-slate-800">Artigos</h2>
                 <div className="flex gap-2">
                   <button 
-                    onClick={() => setView('add-article')}
+                    onClick={generateArticlesReport}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all shadow-sm"
+                  >
+                    <FileText size={18} />
+                    Relatório PDF
+                  </button>
+                  <button 
+                    onClick={openAddArticle}
                     className="flex items-center gap-2 px-4 py-2 a2r-gradient text-white rounded-xl font-medium shadow-lg shadow-blue-200"
                   >
                     <Plus size={18} />
@@ -1873,18 +1989,6 @@ export default function App() {
                         </div>
                       )}
                     </div>
-
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setArticleSearchQuery(article.description);
-                        setShowArticleSearchModal(true);
-                      }}
-                      className="p-2 bg-slate-50 text-slate-400 hover:text-a2r-blue-dark hover:bg-blue-50 rounded-xl transition-all flex-shrink-0"
-                      title="Pesquisa Avançada"
-                    >
-                      <Search size={20} />
-                    </button>
                     
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-0.5">
@@ -1905,26 +2009,28 @@ export default function App() {
                           {article.available_stock} Disponível
                         </p>
                       </div>
-                      <div className="flex gap-1" onClick={e => e.stopPropagation()}>
+                      <div className="flex gap-2" onClick={e => e.stopPropagation()}>
                         <button 
                           onClick={() => {
                             setSelectedStockArticle(article);
                             setShowStockEntryForm(true);
                           }}
-                          className="p-1.5 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-all"
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition-all border border-emerald-100"
                           title="Entrada de Stock"
                         >
-                          <PlusCircle size={18} />
+                          <PlusCircle size={16} />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">Entradas</span>
                         </button>
                         <button 
                           onClick={() => {
                             setSelectedStockArticle(article);
                             setShowStockExitForm(true);
                           }}
-                          className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl transition-all border border-red-100"
                           title="Saída de Stock"
                         >
-                          <MinusCircle size={18} />
+                          <MinusCircle size={16} />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">Saídas</span>
                         </button>
                         <button 
                           onClick={() => {
@@ -1932,14 +2038,15 @@ export default function App() {
                             setStockFilter('ALL');
                             setView('article-stock');
                           }}
-                          className="p-1.5 text-a2r-blue-dark hover:bg-blue-50 rounded-lg transition-all"
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-a2r-blue-dark bg-blue-50 hover:bg-blue-100 rounded-xl transition-all border border-blue-100"
                           title="Movimentos de Stock"
                         >
-                          <History size={18} />
+                          <History size={16} />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">Movimentos</span>
                         </button>
                         <button 
                           onClick={() => confirmDeleteArticle(article.id)}
-                          className="p-1.5 rounded-lg bg-slate-50 text-slate-400 hover:text-red-500 transition-all"
+                          className="p-1.5 rounded-xl bg-slate-50 text-slate-400 hover:text-red-500 transition-all border border-slate-100"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -1976,11 +2083,9 @@ export default function App() {
                       <label className="block text-sm font-medium text-slate-700 mb-1">Stock Total</label>
                       <input 
                         type="number" 
-                        required
-                        min="0"
-                        className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                        value={editingArticle.total_stock ?? ''}
-                        onChange={e => setEditingArticle({...editingArticle, total_stock: parseInt(e.target.value) || 0})}
+                        disabled
+                        className="w-full px-4 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 cursor-not-allowed outline-none"
+                        value={editingArticle.total_stock ?? 0}
                       />
                     </div>
                     <div>
@@ -2091,7 +2196,7 @@ export default function App() {
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="flex flex-col h-full space-y-6"
+              className="flex flex-col flex-1 min-h-0 space-y-6"
             >
               <div className="flex items-center justify-between shrink-0">
                 <h2 className="text-2xl font-bold text-slate-800">
@@ -2981,7 +3086,7 @@ export default function App() {
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="flex flex-col h-full space-y-6"
+              className="flex flex-col flex-1 min-h-0 space-y-6"
             >
               <div className="flex items-center justify-between shrink-0">
                 <h2 className="text-2xl font-bold text-slate-800">Posição de Stock</h2>
@@ -3184,16 +3289,25 @@ export default function App() {
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="flex flex-col h-full space-y-6"
+              className="flex flex-col flex-1 min-h-0 space-y-6"
             >
               <div className="flex items-center justify-between shrink-0">
                 <h2 className="text-2xl font-bold text-slate-800">Histórico</h2>
-                <button 
-                  onClick={() => setView('menu')}
-                  className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  <X size={24} />
-                </button>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={generateStockMovementsReport}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all shadow-sm"
+                  >
+                    <FileText size={18} />
+                    Relatório PDF
+                  </button>
+                  <button 
+                    onClick={() => setView('menu')}
+                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 shrink-0">
@@ -3374,7 +3488,7 @@ export default function App() {
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="flex flex-col h-full space-y-6"
+              className="flex flex-col flex-1 min-h-0 space-y-6"
             >
               <div className="flex items-center justify-between shrink-0">
                 <h2 className="text-2xl font-bold text-slate-800">
@@ -4063,7 +4177,7 @@ export default function App() {
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="flex flex-col h-full space-y-6"
+              className="flex flex-col flex-1 min-h-0 space-y-6"
             >
               <div className="flex items-center justify-between shrink-0">
                 <h2 className="text-2xl font-bold text-slate-800">
@@ -4781,11 +4895,9 @@ export default function App() {
                       <label className="block text-sm font-medium text-slate-700 mb-1">Stock Total</label>
                       <input 
                         type="number" 
-                        required
-                        min="0"
-                        className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                        value={newArticle.total_stock || ''}
-                        onChange={e => setNewArticle({...newArticle, total_stock: parseInt(e.target.value)})}
+                        disabled
+                        className="w-full px-4 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 cursor-not-allowed outline-none"
+                        value={newArticle.total_stock ?? 0}
                       />
                     </div>
                   </div>
@@ -4863,6 +4975,148 @@ export default function App() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          )}
+
+          {view === 'article-stock' && (
+            <motion.div
+              key="article-stock"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="flex flex-col flex-1 min-h-0 space-y-6"
+            >
+              <div className="flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-4">
+                  <button 
+                    onClick={() => setView('articles')}
+                    className="p-2.5 bg-white text-slate-400 hover:text-slate-600 rounded-2xl transition-all border border-slate-100 shadow-sm"
+                  >
+                    <ChevronDown className="rotate-90" size={24} />
+                  </button>
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800">Movimentos de Stock</h2>
+                    {selectedStockArticle && (
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="px-1.5 py-0.5 bg-a2r-blue-dark/10 text-a2r-blue-dark rounded text-[10px] font-bold uppercase tracking-wider">
+                          {selectedStockArticle.code}
+                        </span>
+                        <p className="text-sm text-slate-500 font-medium truncate max-w-[200px] md:max-w-md">
+                          {selectedStockArticle.description}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={generateStockMovementsReport}
+                    className="hidden md:flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all shadow-sm"
+                  >
+                    <FileText size={18} />
+                    Relatório PDF
+                  </button>
+                  <button 
+                    onClick={() => setView('menu')}
+                    className="p-2.5 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col md:flex-row gap-4 shrink-0">
+                <div className="flex-1">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Filtrar por Tipo</label>
+                  <div className="flex bg-white p-1.5 rounded-2xl border border-slate-100 shadow-sm">
+                    {(['ALL', 'IN', 'OUT'] as const).map(type => (
+                      <button
+                        key={type}
+                        onClick={() => setStockFilter(type)}
+                        className={`flex-1 py-2 rounded-xl text-xs font-bold transition-all ${
+                          stockFilter === type 
+                            ? type === 'ALL' ? 'bg-a2r-blue-dark text-white shadow-lg shadow-blue-200'
+                            : type === 'IN' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-200'
+                            : 'bg-red-500 text-white shadow-lg shadow-red-200'
+                            : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                      >
+                        {type === 'ALL' ? 'Todos' : type === 'IN' ? 'Entradas' : 'Saídas'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="w-full md:w-56">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 ml-1">Desde a Data</label>
+                  <input 
+                    type="date" 
+                    className="w-full px-4 py-2.5 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light text-sm font-medium bg-white shadow-sm"
+                    value={stockStartDate}
+                    onChange={e => setStockStartDate(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+                {stockMovements
+                  .filter(m => {
+                    const matchesArticle = !selectedStockArticle || m.article_id === selectedStockArticle.id;
+                    const matchesType = stockFilter === 'ALL' || m.type === stockFilter;
+                    const matchesDate = m.date >= stockStartDate;
+                    return matchesArticle && matchesType && matchesDate;
+                  })
+                  .map(movement => (
+                    <div key={movement.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex items-center justify-between gap-4 hover:shadow-md transition-shadow">
+                      <div className="flex items-center gap-4">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                          movement.type === 'IN' ? 'bg-emerald-50 text-emerald-500' : 'bg-red-50 text-red-500'
+                        }`}>
+                          {movement.type === 'IN' ? <PlusCircle size={20} /> : <MinusCircle size={20} />}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-slate-400">{formatDateDisplay(movement.date)}</span>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              movement.type === 'IN' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'
+                            }`}>
+                              {movement.type === 'IN' ? 'Entrada' : 'Saída'}
+                            </span>
+                            {movement.document_number && (
+                              <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                                Doc: {movement.document_number}
+                              </span>
+                            )}
+                          </div>
+                          <p className="font-bold text-slate-800">{movement.article_description}</p>
+                          {movement.observations && (
+                            <p className="text-xs text-slate-500 mt-0.5 italic">"{movement.observations}"</p>
+                          )}
+                          <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                            <UserPlus size={10} /> {movement.user_name}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className={`text-lg font-black ${movement.type === 'IN' ? 'text-emerald-500' : 'text-red-500'}`}>
+                          {movement.type === 'IN' ? '+' : '-'}{movement.quantity}
+                        </p>
+                        <button 
+                          onClick={() => handleDeleteStockMovement(movement.id)}
+                          className="p-1.5 text-slate-300 hover:text-red-500 transition-all"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                
+                {stockMovements.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                    <History size={48} className="mb-4 opacity-20" />
+                    <p className="font-medium">Nenhum movimento encontrado</p>
+                  </div>
+                )}
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -5066,139 +5320,6 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
-
-          {view === 'article-stock' && (
-            <motion.div
-              key="article-stock"
-              initial={{ opacity: 0, x: 20 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className="flex flex-col h-full space-y-6"
-            >
-              <div className="flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-4">
-                  <button 
-                    onClick={() => setView('articles')}
-                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
-                  >
-                    <ChevronDown className="rotate-90" size={24} />
-                  </button>
-                  <div>
-                    <h2 className="text-2xl font-bold text-slate-800">Movimentos de Stock</h2>
-                    {selectedStockArticle && (
-                      <p className="text-sm text-slate-500 font-medium">
-                        {selectedStockArticle.code} - {selectedStockArticle.description}
-                      </p>
-                    )}
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={generateStockMovementsReport}
-                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition-all"
-                  >
-                    <FileText size={18} />
-                    Relatório PDF
-                  </button>
-                  <button 
-                    onClick={() => setView('menu')}
-                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
-                  >
-                    <X size={24} />
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex flex-col md:flex-row gap-4 shrink-0 bg-white p-4 rounded-3xl border border-slate-100 shadow-sm">
-                <div className="flex-1">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">Tipo</label>
-                  <div className="flex bg-slate-100 p-1 rounded-xl">
-                    {(['ALL', 'IN', 'OUT'] as const).map(type => (
-                      <button
-                        key={type}
-                        onClick={() => setStockFilter(type)}
-                        className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                          stockFilter === type ? 'bg-white text-a2r-blue-dark shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                        }`}
-                      >
-                        {type === 'ALL' ? 'Todos' : type === 'IN' ? 'Entradas' : 'Saídas'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="w-full md:w-48">
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 ml-1">Desde</label>
-                  <input 
-                    type="date" 
-                    className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light text-sm"
-                    value={stockStartDate}
-                    onChange={e => setStockStartDate(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
-                {stockMovements
-                  .filter(m => {
-                    const matchesArticle = !selectedStockArticle || m.article_id === selectedStockArticle.id;
-                    const matchesType = stockFilter === 'ALL' || m.type === stockFilter;
-                    const matchesDate = m.date >= stockStartDate;
-                    return matchesArticle && matchesType && matchesDate;
-                  })
-                  .map(movement => (
-                    <div key={movement.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex items-center justify-between gap-4">
-                      <div className="flex items-center gap-4">
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                          movement.type === 'IN' ? 'bg-emerald-50 text-emerald-500' : 'bg-red-50 text-red-500'
-                        }`}>
-                          {movement.type === 'IN' ? <PlusCircle size={20} /> : <MinusCircle size={20} />}
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-slate-400">{formatDateDisplay(movement.date)}</span>
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-                              movement.type === 'IN' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'
-                            }`}>
-                              {movement.type === 'IN' ? 'Entrada' : 'Saída'}
-                            </span>
-                            {movement.document_number && (
-                              <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
-                                Doc: {movement.document_number}
-                              </span>
-                            )}
-                          </div>
-                          <p className="font-bold text-slate-800">{movement.article_description}</p>
-                          {movement.observations && (
-                            <p className="text-xs text-slate-500 mt-0.5 italic">"{movement.observations}"</p>
-                          )}
-                          <p className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
-                            <UserPlus size={10} /> {movement.user_name}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className={`text-lg font-black ${movement.type === 'IN' ? 'text-emerald-500' : 'text-red-500'}`}>
-                          {movement.type === 'IN' ? '+' : '-'}{movement.quantity}
-                        </p>
-                        <button 
-                          onClick={() => handleDeleteStockMovement(movement.id)}
-                          className="p-1.5 text-slate-300 hover:text-red-500 transition-all"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                
-                {stockMovements.length === 0 && (
-                  <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-                    <History size={48} className="mb-4 opacity-20" />
-                    <p className="font-medium">Nenhum movimento encontrado</p>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          )}
 
           {/* Stock Entry/Exit Modals */}
           <AnimatePresence>

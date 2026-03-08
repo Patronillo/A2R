@@ -173,6 +173,19 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok", message: "A2R Inventory API is running on Vercel" });
 });
 
+app.get("/api/stats/db-size", async (req, res) => {
+  try {
+    const { rows } = await sql`
+      SELECT pg_size_pretty(SUM(pg_total_relation_size(quote_ident(schemaname) || '.' || quote_ident(tablename)))) as size
+      FROM pg_tables
+      WHERE schemaname = 'public'
+    `;
+    res.json({ size: rows[0]?.size || '0 B' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/api/test", (req, res) => {
   res.json({ message: "API is working" });
 });
@@ -287,13 +300,20 @@ app.get("/api/articles", async (req, res) => {
 app.post("/api/articles", async (req, res) => {
   const { code, description, total_stock, height, width, length, weight, photo } = req.body;
   try {
+    const h = isNaN(parseFloat(height)) ? null : parseFloat(height);
+    const w = isNaN(parseFloat(width)) ? null : parseFloat(width);
+    const l = isNaN(parseFloat(length)) ? null : parseFloat(length);
+    const wg = isNaN(parseFloat(weight)) ? null : parseFloat(weight);
+    const ts = isNaN(parseInt(total_stock)) ? 0 : parseInt(total_stock);
+
     const { rows } = await sql`
       INSERT INTO articles (code, description, total_stock, available_stock, height, width, length, weight, photo)
-      VALUES (${code}, ${description}, ${total_stock}, ${total_stock}, ${height}, ${width}, ${length}, ${weight}, ${photo})
+      VALUES (${code}, ${description}, ${ts}, ${ts}, ${h}, ${w}, ${l}, ${wg}, ${photo})
       RETURNING id
     `;
     res.json({ id: rows[0].id });
   } catch (e: any) {
+    console.error("[DB] Error creating article:", e);
     res.status(400).json({ error: e.message });
   }
 });
@@ -307,16 +327,23 @@ app.put("/api/articles/:id", async (req, res) => {
     if (rows.length === 0) return res.status(404).json({ error: "Artigo não encontrado" });
 
     const article = rows[0];
-    const diff = total_stock - article.total_stock;
+    const ts = isNaN(parseInt(total_stock)) ? article.total_stock : parseInt(total_stock);
+    const diff = ts - article.total_stock;
     const newAvailable = article.available_stock + diff;
+
+    const h = isNaN(parseFloat(height)) ? null : parseFloat(height);
+    const w = isNaN(parseFloat(width)) ? null : parseFloat(width);
+    const l = isNaN(parseFloat(length)) ? null : parseFloat(length);
+    const wg = isNaN(parseFloat(weight)) ? null : parseFloat(weight);
 
     await sql`
       UPDATE articles 
-      SET code = ${code}, description = ${description}, total_stock = ${total_stock}, available_stock = ${newAvailable}, height = ${height}, width = ${width}, length = ${length}, weight = ${weight}, photo = ${photo}
+      SET code = ${code}, description = ${description}, total_stock = ${ts}, available_stock = ${newAvailable}, height = ${h}, width = ${w}, length = ${l}, weight = ${wg}, photo = ${photo}
       WHERE id = ${id}
     `;
     res.json({ success: true });
   } catch (e: any) {
+    console.error("[DB] Error updating article:", e);
     res.status(400).json({ error: e.message });
   }
 });
