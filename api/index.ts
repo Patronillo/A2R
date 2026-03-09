@@ -854,6 +854,42 @@ app.delete("/api/stock-movements/:id", async (req, res) => {
   }
 });
 
+app.put("/api/stock-movements/:id", async (req, res) => {
+  const { id } = req.params;
+  const { type, quantity, date, document_number, observations } = req.body;
+  try {
+    const { rows: smRows } = await sql`SELECT * FROM stock_movements WHERE id = ${id}`;
+    if (smRows.length === 0) return res.status(404).json({ error: "Movimento não encontrado" });
+
+    const oldSm = smRows[0];
+    const newQty = Number(quantity);
+    
+    // Revert old stock change
+    const revertChange = oldSm.type === 'IN' ? -oldSm.quantity : oldSm.quantity;
+    // Apply new stock change
+    const applyChange = type === 'IN' ? newQty : -newQty;
+    
+    const totalChange = revertChange + applyChange;
+
+    await sql`
+      UPDATE articles 
+      SET total_stock = total_stock + ${totalChange}, 
+          available_stock = available_stock + ${totalChange} 
+      WHERE id = ${oldSm.article_id}
+    `;
+
+    await sql`
+      UPDATE stock_movements 
+      SET type = ${type}, quantity = ${newQty}, date = ${date}, document_number = ${document_number}, observations = ${observations}
+      WHERE id = ${id}
+    `;
+    
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // API 404 Handler
 app.use("/api", (req, res) => {
   res.status(404).json({ 

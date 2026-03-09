@@ -19,6 +19,7 @@ import {
   History,
   LayoutGrid,
   Edit,
+  Edit2,
   MapPin,
   Phone,
   Printer,
@@ -72,7 +73,7 @@ const isHoliday = (date: Date) => {
   return false;
 };
 
-type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar' | 'position' | 'article-stock';
+type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar' | 'position' | 'article-stock' | 'inventory-report';
 
 const UNDEFINED_DATE = '9999-12-31T23:59';
 
@@ -306,8 +307,10 @@ export default function App() {
   const [showInputForm, setShowInputForm] = useState(false);
   const [showStockEntryForm, setShowStockEntryForm] = useState(false);
   const [showStockExitForm, setShowStockExitForm] = useState(false);
+  const [editingStockMovement, setEditingStockMovement] = useState<StockMovement | null>(null);
   const [selectedStockArticle, setSelectedStockArticle] = useState<Article | null>(null);
   const [stockForm, setStockForm] = useState({
+    type: 'IN' as 'IN' | 'OUT',
     document_number: '',
     date: new Date().toISOString().split('T')[0],
     quantity: 0,
@@ -318,10 +321,12 @@ export default function App() {
   const [outputSearch, setOutputSearch] = useState('');
   const [outputStatusFilter, setOutputStatusFilter] = useState<'ALL' | 'ACTIVE' | 'SETTLED'>('ACTIVE');
   const [outputStartDate, setOutputStartDate] = useState('2026-01-01');
+  const [outputTodayOnly, setOutputTodayOnly] = useState(false);
   const [expandedOutputs, setExpandedOutputs] = useState<Record<number, boolean>>({});
   const [inputSearch, setInputSearch] = useState('');
   const [inputStatusFilter, setInputStatusFilter] = useState<'ACTIVE' | 'COMPLETED' | 'ALL'>('ACTIVE');
   const [inputStartDate, setInputStartDate] = useState('2026-01-01');
+  const [inputTodayOnly, setInputTodayOnly] = useState(false);
   const [showArticleSearchModal, setShowArticleSearchModal] = useState(false);
   const [articleSearchQuery, setArticleSearchQuery] = useState('');
   const [historyArticleFilter, setHistoryArticleFilter] = useState('');
@@ -337,6 +342,12 @@ export default function App() {
   const [calendarFilter, setCalendarFilter] = useState<'ALL' | 'ENTREGAS' | 'ATIVAS' | 'EFETUADAS'>('ALL');
   const [positionArticleId, setPositionArticleId] = useState<string>('');
   const [positionSearchQuery, setPositionSearchQuery] = useState('');
+  const [reportStartArticle, setReportStartArticle] = useState<Article | null>(null);
+  const [reportEndArticle, setReportEndArticle] = useState<Article | null>(null);
+  const [reportStartDate, setReportStartDate] = useState('2026-01-01');
+  const [reportEndDate, setReportEndDate] = useState('2026-12-31');
+  const [reportOrder, setReportOrder] = useState<'code' | 'description'>('code');
+  const [showArticleSearchFor, setShowArticleSearchFor] = useState<'start' | 'end' | null>(null);
   const timelineRef = React.useRef<HTMLDivElement>(null);
 
   const articleCodeInputRef = React.useRef<HTMLInputElement>(null);
@@ -464,13 +475,18 @@ export default function App() {
 
     setLoading(true);
     try {
-      const response = await fetch('/api/stock-movements', {
-        method: 'POST',
+      const url = editingStockMovement 
+        ? `/api/stock-movements/${editingStockMovement.id}` 
+        : '/api/stock-movements';
+      const method = editingStockMovement ? 'PUT' : 'POST';
+
+      const response = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           article_id: selectedStockArticle.id,
           user_id: user.id,
-          type: showStockEntryForm ? 'IN' : 'OUT',
+          type: stockForm.type,
           quantity: stockForm.quantity,
           date: stockForm.date,
           document_number: stockForm.document_number,
@@ -479,10 +495,12 @@ export default function App() {
       });
 
       if (response.ok) {
-        showToast('Movimento registado com sucesso!');
+        showToast(editingStockMovement ? 'Movimento atualizado com sucesso!' : 'Movimento registado com sucesso!');
         setShowStockEntryForm(false);
         setShowStockExitForm(false);
+        setEditingStockMovement(null);
         setStockForm({
+          type: 'IN',
           document_number: '',
           date: new Date().toISOString().split('T')[0],
           quantity: 0,
@@ -492,7 +510,7 @@ export default function App() {
         fetchStockMovements();
       } else {
         const data = await response.json();
-        showToast(data.error || 'Erro ao registar movimento', 'error');
+        showToast(data.error || 'Erro ao processar movimento', 'error');
       }
     } catch (e) {
       showToast('Erro de conexão', 'error');
@@ -533,91 +551,303 @@ export default function App() {
     const { jsPDF } = await import('jspdf');
     const autoTable = (await import('jspdf-autotable')).default;
     
-    const doc = new jsPDF();
+    const doc = new jsPDF('l', 'mm', 'a4');
     
     // Header
     doc.setFontSize(20);
     doc.setTextColor(15, 23, 42); // slate-900
     
-    const title = selectedStockArticle 
-      ? `Movimentos ${selectedStockArticle.description}` 
-      : 'Movimentos Globais';
-    
-    doc.text(title, 14, 22);
-    
-    doc.setFontSize(10);
-    doc.setTextColor(100, 116, 139); // slate-500
-    doc.text(`Gerado em: ${new Date().toLocaleString('pt-PT')}`, 14, 30);
-    doc.text(`Filtro: ${stockFilter === 'ALL' ? 'Todos' : stockFilter === 'IN' ? 'Entradas' : 'Saídas'}`, 14, 35);
-    doc.text(`Desde: ${formatDateDisplay(stockStartDate)}`, 14, 40);
+    if (view === 'history') {
+      doc.text('Histórico de Entregas e Recolhas', 14, 22);
+      
+      doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139); // slate-500
+      doc.text(`Gerado em: ${new Date().toLocaleString('pt-PT')}`, 14, 30);
+      doc.text(`Desde: ${formatDateDisplay(historyStartDate)}`, 14, 35);
+      if (historyArticleFilter) {
+        doc.text(`Filtro Artigo: ${historyArticleFilter}`, 14, 40);
+      }
 
-    const filteredMovements = stockMovements.filter(m => {
-      const matchesArticle = !selectedStockArticle || m.article_id === selectedStockArticle.id;
-      const matchesType = stockFilter === 'ALL' || m.type === stockFilter;
-      const matchesDate = m.date >= stockStartDate;
-      return matchesArticle && matchesType && matchesDate;
-    });
+      const combinedHistory: any[] = [];
+      outputs.forEach(o => {
+        o.items?.forEach(item => {
+          combinedHistory.push({
+            type: 'ENTREGA',
+            date: o.delivery_date || o.created_at,
+            article_description: item.article_description,
+            article_code: item.article_code,
+            quantity: item.quantity_out,
+            client_name: o.client_name,
+            location_name: o.location_name,
+            space_at_location: o.space_at_location,
+            delivery_type: o.type,
+            user_name: o.user_name,
+          });
+        });
+      });
 
-    const tableData = filteredMovements.map(m => [
-      formatDateDisplay(m.date),
-      m.article_description || '',
-      m.type === 'IN' ? 'ENTRADA' : 'SAÍDA',
-      m.quantity.toString(),
-      m.document_number || '-',
-      m.observations || '-'
-    ]);
+      movements.filter(m => m.type === 'IN' && m.observations?.includes('Recolha')).forEach(m => {
+        const outputIdMatch = m.observations?.match(/#(\d+)/);
+        const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
+        const relatedOutput = outputId ? outputs.find(o => o.id === outputId) : null;
 
-    autoTable(doc, {
-      startY: 45,
-      head: [['Data', 'Artigo', 'Tipo', 'Qtd', 'Doc/Fatura', 'Observações']],
-      body: tableData,
-      headStyles: { fillColor: [15, 23, 42], textColor: 255 },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
-      margin: { top: 45 },
-    });
+        combinedHistory.push({
+          type: 'RECOLHA',
+          date: m.date,
+          article_description: m.article_description,
+          article_code: m.article_code,
+          quantity: m.quantity,
+          user_name: m.user_name,
+          client_name: relatedOutput?.client_name || '',
+          location_name: relatedOutput?.location_name || '',
+          space_at_location: relatedOutput?.space_at_location || '',
+          delivery_type: relatedOutput?.type || ''
+        });
+      });
 
-    const fileName = selectedStockArticle 
-      ? `movimentos-${selectedStockArticle.code}-${new Date().toISOString().split('T')[0]}.pdf`
-      : `movimentos-globais-${new Date().toISOString().split('T')[0]}.pdf`;
+      const filtered = combinedHistory
+        .filter(h => {
+          const date = new Date(h.date);
+          const start = new Date(historyStartDate);
+          const matchesDate = date >= start;
+          const matchesArticle = h.article_description.toLowerCase().includes(historyArticleFilter.toLowerCase()) ||
+                               h.article_code.toLowerCase().includes(historyArticleFilter.toLowerCase());
+          return matchesDate && matchesArticle;
+        })
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    doc.save(fileName);
+      const tableData = filtered.map(h => [
+        formatDateDisplay(h.date),
+        h.type,
+        h.delivery_type || '-',
+        h.article_code,
+        h.article_description,
+        h.quantity.toString(),
+        h.client_name || '-',
+        `${h.location_name || ''} ${h.space_at_location ? `(${h.space_at_location})` : ''}`.trim() || '-',
+        h.user_name
+      ]);
+
+      autoTable(doc, {
+        startY: 45,
+        head: [['Data', 'Tipo', 'Subtipo', 'Cód.', 'Artigo', 'Qtd', 'Cliente', 'Localização', 'Utilizador']],
+        body: tableData,
+        headStyles: { fillColor: [15, 23, 42], textColor: 255 },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        margin: { top: 45 },
+      });
+
+      doc.save(`historico-entregas-recolhas-${new Date().toISOString().split('T')[0]}.pdf`);
+    } else {
+      const title = selectedStockArticle 
+        ? `Movimentos ${selectedStockArticle.description}` 
+        : 'Movimentos Globais';
+      
+      doc.text(title, 14, 22);
+      
+      doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139); // slate-500
+      doc.text(`Gerado em: ${new Date().toLocaleString('pt-PT')}`, 14, 30);
+      doc.text(`Filtro: ${stockFilter === 'ALL' ? 'Todos' : stockFilter === 'IN' ? 'Entradas' : 'Saídas'}`, 14, 35);
+      doc.text(`Desde: ${formatDateDisplay(stockStartDate)}`, 14, 40);
+
+      const filteredMovements = stockMovements.filter(m => {
+        const matchesArticle = !selectedStockArticle || m.article_id === selectedStockArticle.id;
+        const matchesType = stockFilter === 'ALL' || m.type === stockFilter;
+        const matchesDate = m.date >= stockStartDate;
+        return matchesArticle && matchesType && matchesDate;
+      });
+
+      const tableData = filteredMovements.map(m => [
+        formatDateDisplay(m.date),
+        m.article_description || '',
+        m.type === 'IN' ? 'ENTRADA' : 'SAÍDA',
+        m.quantity.toString(),
+        m.document_number || '-',
+        m.observations || '-'
+      ]);
+
+      autoTable(doc, {
+        startY: 45,
+        head: [['Data', 'Artigo', 'Tipo', 'Qtd', 'Doc/Fatura', 'Observações']],
+        body: tableData,
+        headStyles: { fillColor: [15, 23, 42], textColor: 255 },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        margin: { top: 45 },
+      });
+
+      const fileName = selectedStockArticle 
+        ? `movimentos-${selectedStockArticle.code}-${new Date().toISOString().split('T')[0]}.pdf`
+        : `movimentos-globais-${new Date().toISOString().split('T')[0]}.pdf`;
+
+      doc.save(fileName);
+    }
   };
 
-  const generateArticlesReport = async () => {
+  const initializeReportArticles = (order: 'code' | 'description') => {
+    if (articles.length === 0) return;
+    
+    const sorted = [...articles].sort((a, b) => {
+      if (order === 'code') {
+        return a.code.localeCompare(b.code);
+      } else {
+        return a.description.localeCompare(b.description);
+      }
+    });
+    
+    setReportStartArticle(sorted[0]);
+    setReportEndArticle(sorted[sorted.length - 1]);
+  };
+
+  const generateInventoryReportPDF = async () => {
+    if (!reportStartArticle || !reportEndArticle) {
+      showToast('Selecione o artigo inicial e final', 'error');
+      return;
+    }
+
     const { jsPDF } = await import('jspdf');
     const autoTable = (await import('jspdf-autotable')).default;
     
-    const doc = new jsPDF();
+    const doc = new jsPDF('p', 'mm', 'a4');
     
+    // Filter articles in range based on selected order
+    const filteredArticles = articles
+      .filter(a => {
+        if (reportOrder === 'code') {
+          return a.code >= reportStartArticle.code && a.code <= reportEndArticle.code;
+        } else {
+          return a.description.toLowerCase() >= reportStartArticle.description.toLowerCase() && 
+                 a.description.toLowerCase() <= reportEndArticle.description.toLowerCase();
+        }
+      })
+      .sort((a, b) => {
+        if (reportOrder === 'code') {
+          return a.code.localeCompare(b.code);
+        } else {
+          return a.description.localeCompare(b.description);
+        }
+      });
+
+    if (filteredArticles.length === 0) {
+      showToast('Nenhum artigo encontrado no intervalo selecionado', 'error');
+      return;
+    }
+
     // Header
-    doc.setFontSize(20);
-    doc.setTextColor(15, 23, 42); // slate-900
-    doc.text('Inventário Geral de Artigos', 14, 22);
+    doc.setFillColor(35, 78, 122); // a2r-blue-dark
+    doc.rect(0, 0, 210, 45, 'F');
+
+    doc.setFontSize(24);
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Relatório de Inventário', 14, 20);
     
     doc.setFontSize(10);
-    doc.setTextColor(100, 116, 139); // slate-500
-    doc.text(`Gerado em: ${new Date().toLocaleString('pt-PT')}`, 14, 30);
-    doc.text(`Total de Artigos: ${articles.length}`, 14, 35);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(200, 210, 230);
+    doc.text(`Gerado em: ${new Date().toLocaleString('pt-PT')}`, 14, 28);
+    doc.text(`Período: ${formatDateDisplay(reportStartDate)} a ${formatDateDisplay(reportEndDate)}`, 14, 33);
+    doc.text(`Intervalo (${reportOrder === 'code' ? 'Código' : 'Descrição'}): ${reportOrder === 'code' ? reportStartArticle.code : reportStartArticle.description} a ${reportOrder === 'code' ? reportEndArticle.code : reportEndArticle.description}`, 14, 38);
 
-    const tableData = articles.map(a => [
-      a.code,
-      a.description,
-      a.total_stock.toString(),
-      a.available_stock.toString(),
-      `${a.height}x${a.width}x${a.length}`,
-      a.weight.toString()
-    ]);
+    let currentY = 55;
 
-    autoTable(doc, {
-      startY: 40,
-      head: [['Código', 'Descrição', 'Stock Total', 'Disponível', 'Dimensões', 'Peso (kg)']],
-      body: tableData,
-      headStyles: { fillColor: [15, 23, 42], textColor: 255 },
-      alternateRowStyles: { fillColor: [248, 250, 252] },
-      margin: { top: 40 },
-    });
+    for (const article of filteredArticles) {
+      // Calculate previous stock (all movements before reportStartDate)
+      const movementsBefore = stockMovements.filter(m => m.article_id === article.id && m.date < reportStartDate);
+      const initialStock = movementsBefore.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
 
-    doc.save(`inventario-artigos-${new Date().toISOString().split('T')[0]}.pdf`);
+      // Movements in period (between reportStartDate and reportEndDate)
+      const movementsInPeriod = stockMovements
+        .filter(m => m.article_id === article.id && m.date >= reportStartDate && m.date <= reportEndDate + 'T23:59:59')
+        .sort((a, b) => a.date.localeCompare(b.date));
+
+      const finalStock = initialStock + movementsInPeriod.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
+
+      // Check if we need a new page
+      if (currentY > 240) {
+        doc.addPage();
+        currentY = 20;
+      }
+
+      if (movementsInPeriod.length === 0) {
+        // Compact view for articles without movements
+        doc.setFontSize(11);
+        doc.setTextColor(15, 23, 42);
+        doc.setFont('helvetica', 'bold');
+        const articleText = `Artigo: ${article.code} - ${article.description}`;
+        doc.text(articleText, 14, currentY);
+        
+        const textWidth = doc.getTextWidth(articleText);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'italic');
+        doc.setTextColor(148, 163, 184);
+        doc.text(' (Sem movimentos no período selecionado.)', 14 + textWidth, currentY);
+
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text(`Stock Final em ${formatDateDisplay(reportEndDate)}: ${finalStock}`, 196, currentY, { align: 'right' });
+        
+        doc.setDrawColor(226, 232, 240);
+        doc.line(14, currentY + 4, 196, currentY + 4);
+        currentY += 12;
+      } else {
+        // Detailed view for articles with movements
+        doc.setFontSize(11);
+        doc.setTextColor(15, 23, 42);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`Artigo: ${article.code} - ${article.description}`, 14, currentY);
+        
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(71, 85, 105);
+        doc.text(`Stock em ${formatDateDisplay(reportStartDate)}: ${initialStock}`, 196, currentY, { align: 'right' });
+        
+        currentY += 2;
+
+        const tableRows = movementsInPeriod.map(m => [
+          formatDateDisplay(m.date),
+          m.type === 'IN' ? 'ENTRADA' : 'SAÍDA',
+          m.quantity.toString(),
+          m.document_number || '-',
+          m.observations || '-'
+        ]);
+
+        autoTable(doc, {
+          startY: currentY,
+          head: [['Data', 'Tipo', 'Qtd', 'Documento', 'Observações']],
+          body: tableRows,
+          theme: 'grid',
+          headStyles: { fillColor: [71, 85, 105], textColor: 255, fontSize: 8, halign: 'center' },
+          columnStyles: {
+            0: { cellWidth: 25, halign: 'center' },
+            1: { cellWidth: 20, halign: 'center' },
+            2: { cellWidth: 15, halign: 'center' },
+            3: { cellWidth: 35 },
+            4: { cellWidth: 'auto' }
+          },
+          styles: { fontSize: 8, cellPadding: 2 },
+          margin: { left: 14, right: 14 },
+          didDrawPage: (data) => {
+            if (data.cursor) {
+              currentY = data.cursor.y;
+            }
+          }
+        });
+        
+        currentY += 2;
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text(`Stock Final em ${formatDateDisplay(reportEndDate)}: ${finalStock}`, 196, currentY + 2, { align: 'right' });
+        
+        doc.setDrawColor(226, 232, 240);
+        doc.line(14, currentY + 5, 196, currentY + 5);
+        currentY += 12;
+      }
+    }
+
+    doc.save(`relatorio-inventario-${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
   const handleLogin = async (e?: React.FormEvent) => {
@@ -1895,7 +2125,7 @@ export default function App() {
                     </div>
                     <div className="text-left">
                       <h4 className="text-white text-lg md:text-xl font-bold font-display">Histórico de Movimentos</h4>
-                      <p className="text-white/70 text-[10px] md:text-sm font-medium">Auditoria completa de todas as entradas e saídas.</p>
+                      <p className="text-white/70 text-[10px] md:text-sm font-medium">Auditoria completa de todas as entregas e recolhas.</p>
                     </div>
                   </div>
                   <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-white/10 flex items-center justify-center text-white group-hover:bg-white group-hover:text-a2r-blue-dark transition-all">
@@ -1926,11 +2156,15 @@ export default function App() {
                 <h2 className="text-2xl font-bold text-slate-800">Artigos</h2>
                 <div className="flex gap-2">
                   <button 
-                    onClick={generateArticlesReport}
-                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all shadow-sm"
+                    onClick={() => {
+                      setReportOrder('code');
+                      initializeReportArticles('code');
+                      setView('inventory-report');
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition-all shadow-sm"
                   >
                     <FileText size={18} />
-                    Relatório PDF
+                    Relatório Inventário
                   </button>
                   <button 
                     onClick={openAddArticle}
@@ -2013,6 +2247,7 @@ export default function App() {
                         <button 
                           onClick={() => {
                             setSelectedStockArticle(article);
+                            setStockForm(prev => ({ ...prev, type: 'IN' }));
                             setShowStockEntryForm(true);
                           }}
                           className="flex items-center gap-1.5 px-2.5 py-1.5 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition-all border border-emerald-100"
@@ -2024,6 +2259,7 @@ export default function App() {
                         <button 
                           onClick={() => {
                             setSelectedStockArticle(article);
+                            setStockForm(prev => ({ ...prev, type: 'OUT' }));
                             setShowStockExitForm(true);
                           }}
                           className="flex items-center gap-1.5 px-2.5 py-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl transition-all border border-red-100"
@@ -3758,7 +3994,18 @@ export default function App() {
                       />
                     </div>
                     <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
-                      <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => setInputTodayOnly(!inputTodayOnly)}
+                        className={`px-4 py-2 rounded-2xl text-sm font-medium transition-all border shadow-sm flex items-center gap-2 ${
+                          inputTodayOnly 
+                            ? 'bg-amber-500 text-white border-amber-500' 
+                            : 'bg-white text-slate-600 border-slate-100 hover:bg-slate-50'
+                        }`}
+                      >
+                        <Clock size={16} />
+                        Hoje
+                      </button>
+                      <div className={`flex items-center gap-2 transition-opacity ${inputTodayOnly ? 'opacity-50 pointer-events-none' : ''}`}>
                         <span className="text-sm font-medium text-slate-500 whitespace-nowrap">Desde:</span>
                         <input 
                           type="date" 
@@ -3810,7 +4057,12 @@ export default function App() {
                         const isActive = !isSettled;
                         const matchesSearch = o.client_name.toLowerCase().includes(inputSearch.toLowerCase()) || 
                                             o.location_name?.toLowerCase().includes(inputSearch.toLowerCase());
-                        const matchesDate = !inputStartDate || (o.collection_date && o.collection_date >= inputStartDate);
+                        
+                        const today = new Date().toISOString().split('T')[0];
+                        const matchesDate = inputTodayOnly 
+                          ? (o.collection_date && o.collection_date.split('T')[0] === today)
+                          : (!inputStartDate || (o.collection_date && o.collection_date >= inputStartDate));
+                        
                         return isActive && matchesSearch && matchesDate;
                       }).map(o => ({ ...o, listType: 'ACTIVE' as const }));
 
@@ -3825,7 +4077,11 @@ export default function App() {
                         const matchesSearch = (relatedOutput?.client_name.toLowerCase().includes(inputSearch.toLowerCase()) || 
                                              relatedOutput?.location_name?.toLowerCase().includes(inputSearch.toLowerCase()) ||
                                              (m.article_description?.toLowerCase().includes(inputSearch.toLowerCase()) || false));
-                        const matchesDate = !inputStartDate || (m.date && m.date >= inputStartDate);
+                        
+                        const today = new Date().toISOString().split('T')[0];
+                        const matchesDate = inputTodayOnly 
+                          ? (m.date && m.date.split('T')[0] === today)
+                          : (!inputStartDate || (m.date && m.date >= inputStartDate));
                         
                         if (matchesSearch && matchesDate) {
                           if (!completedMovementsGrouped[outputId]) {
@@ -4640,7 +4896,18 @@ export default function App() {
                       />
                     </div>
                     <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
-                      <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm">
+                      <button 
+                        onClick={() => setOutputTodayOnly(!outputTodayOnly)}
+                        className={`px-4 py-2 rounded-2xl text-sm font-medium transition-all border shadow-sm flex items-center gap-2 ${
+                          outputTodayOnly 
+                            ? 'bg-amber-500 text-white border-amber-500' 
+                            : 'bg-white text-slate-600 border-slate-100 hover:bg-slate-50'
+                        }`}
+                      >
+                        <Clock size={16} />
+                        Hoje
+                      </button>
+                      <div className={`flex items-center gap-2 bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm transition-opacity ${outputTodayOnly ? 'opacity-50 pointer-events-none' : ''}`}>
                         <span className="text-sm font-medium text-slate-500 whitespace-nowrap">Desde:</span>
                         <input 
                           type="date" 
@@ -4678,7 +4945,11 @@ export default function App() {
                         const matchesSearch = o.client_name.toLowerCase().includes(outputSearch.toLowerCase()) || 
                                             o.location_name?.toLowerCase().includes(outputSearch.toLowerCase());
                         
-                        const matchesDate = !outputStartDate || (o.delivery_date && o.delivery_date >= outputStartDate);
+                        const today = new Date().toISOString().split('T')[0];
+                        const matchesDate = outputTodayOnly 
+                          ? (o.delivery_date && o.delivery_date.split('T')[0] === today)
+                          : (!outputStartDate || (o.delivery_date && o.delivery_date >= outputStartDate));
+                        
                         const isSettled = o.items?.every(item => item.quantity_out === item.quantity_in);
                         const isActive = !isSettled;
 
@@ -5100,12 +5371,40 @@ export default function App() {
                         <p className={`text-lg font-black ${movement.type === 'IN' ? 'text-emerald-500' : 'text-red-500'}`}>
                           {movement.type === 'IN' ? '+' : '-'}{movement.quantity}
                         </p>
-                        <button 
-                          onClick={() => handleDeleteStockMovement(movement.id)}
-                          className="p-1.5 text-slate-300 hover:text-red-500 transition-all"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                        <div className="flex gap-1 justify-end">
+                          <button 
+                            onClick={() => {
+                              const article = articles.find(a => a.id === movement.article_id);
+                              if (article) {
+                                setSelectedStockArticle(article);
+                                setEditingStockMovement(movement);
+                                setStockForm({
+                                  type: movement.type,
+                                  document_number: movement.document_number || '',
+                                  date: movement.date.split('T')[0],
+                                  quantity: movement.quantity,
+                                  observations: movement.observations || ''
+                                });
+                                if (movement.type === 'IN') {
+                                  setShowStockEntryForm(true);
+                                } else {
+                                  setShowStockExitForm(true);
+                                }
+                              }
+                            }}
+                            className="p-1.5 text-slate-300 hover:text-blue-500 transition-all"
+                            title="Editar Movimento"
+                          >
+                            <Edit2 size={16} />
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteStockMovement(movement.id)}
+                            className="p-1.5 text-slate-300 hover:text-red-500 transition-all"
+                            title="Eliminar Movimento"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -5116,6 +5415,181 @@ export default function App() {
                     <p className="font-medium">Nenhum movimento encontrado</p>
                   </div>
                 )}
+              </div>
+            </motion.div>
+          )}
+
+          {view === 'inventory-report' && (
+            <motion.div
+              key="inventory-report"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="flex flex-col flex-1 min-h-0 space-y-6"
+            >
+              <div className="flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-4">
+                  <button 
+                    onClick={() => setView('articles')}
+                    className="p-2.5 bg-white text-slate-400 hover:text-slate-600 rounded-2xl transition-all border border-slate-100 shadow-sm"
+                  >
+                    <ChevronDown className="rotate-90" size={24} />
+                  </button>
+                  <h2 className="text-2xl font-bold text-slate-800">Relatório de Inventário</h2>
+                </div>
+                <button 
+                  onClick={() => setView('menu')}
+                  className="p-2.5 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="bg-white rounded-[2.5rem] p-8 border border-slate-100 shadow-xl space-y-8 overflow-y-auto custom-scrollbar">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                  {/* Ordering */}
+                  <div className="space-y-3">
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Ordenação por</label>
+                    <div className="flex bg-slate-50 p-1.5 rounded-2xl border border-slate-100">
+                      {(['code', 'description'] as const).map(order => (
+                        <button
+                          key={order}
+                          onClick={() => {
+                            setReportOrder(order);
+                            initializeReportArticles(order);
+                          }}
+                          className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all ${
+                            reportOrder === order 
+                              ? 'bg-a2r-blue-dark text-white shadow-lg shadow-blue-200'
+                              : 'text-slate-500 hover:text-slate-700'
+                          }`}
+                        >
+                          {order === 'code' ? 'Código' : 'Descrição'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Start Article */}
+                  <div className="space-y-3">
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">
+                      {reportOrder === 'code' ? 'Artigo Inicial (Código)' : 'Artigo Inicial (Descrição)'}
+                    </label>
+                    <button
+                      onClick={() => {
+                        setShowArticleSearchFor('start');
+                        setShowArticleSearchModal(true);
+                      }}
+                      className="w-full flex items-center justify-between p-4 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 hover:border-a2r-blue-dark hover:bg-white transition-all group"
+                    >
+                      {reportStartArticle ? (
+                        <div className="flex items-center gap-3 text-left">
+                          <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-a2r-blue-dark shadow-sm">
+                            <Package size={20} />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold text-slate-800 truncate">
+                              {reportOrder === 'code' ? reportStartArticle.code : reportStartArticle.description}
+                            </p>
+                            <p className="text-[10px] text-slate-400 truncate">
+                              {reportOrder === 'code' ? reportStartArticle.description : reportStartArticle.code}
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-sm font-medium text-slate-400 italic">Selecionar...</span>
+                      )}
+                      <Search size={20} className="text-slate-300 group-hover:text-a2r-blue-dark" />
+                    </button>
+                  </div>
+
+                  {/* End Article */}
+                  <div className="space-y-3">
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">
+                      {reportOrder === 'code' ? 'Artigo Final (Código)' : 'Artigo Final (Descrição)'}
+                    </label>
+                    <button
+                      onClick={() => {
+                        setShowArticleSearchFor('end');
+                        setShowArticleSearchModal(true);
+                      }}
+                      className="w-full flex items-center justify-between p-4 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 hover:border-a2r-blue-dark hover:bg-white transition-all group"
+                    >
+                      {reportEndArticle ? (
+                        <div className="flex items-center gap-3 text-left">
+                          <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-a2r-blue-dark shadow-sm">
+                            <Package size={20} />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold text-slate-800 truncate">
+                              {reportOrder === 'code' ? reportEndArticle.code : reportEndArticle.description}
+                            </p>
+                            <p className="text-[10px] text-slate-400 truncate">
+                              {reportOrder === 'code' ? reportEndArticle.description : reportEndArticle.code}
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-sm font-medium text-slate-400 italic">Selecionar...</span>
+                      )}
+                      <Search size={20} className="text-slate-300 group-hover:text-a2r-blue-dark" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Dates */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-3">
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Data de Início</label>
+                    <div className="relative">
+                      <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                      <input 
+                        type="date" 
+                        className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-a2r-blue-light outline-none text-lg font-medium"
+                        value={reportStartDate}
+                        onChange={e => setReportStartDate(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Data de Fim</label>
+                    <div className="relative">
+                      <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                      <input 
+                        type="date" 
+                        className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-a2r-blue-light outline-none text-lg font-medium"
+                        value={reportEndDate}
+                        onChange={e => setReportEndDate(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-4">
+                  <button
+                    onClick={generateInventoryReportPDF}
+                    disabled={!reportStartArticle || !reportEndArticle}
+                    className="w-full md:w-auto flex items-center justify-center gap-3 px-12 py-4 a2r-gradient text-white rounded-2xl font-bold shadow-xl shadow-blue-200 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 disabled:shadow-none"
+                  >
+                    <FileText size={24} />
+                    Gerar Relatório de Inventário
+                  </button>
+                </div>
+
+                <div className="bg-blue-50 rounded-3xl p-6 border border-blue-100 flex items-start gap-4">
+                  <div className="p-2 bg-white rounded-xl text-a2r-blue-dark shadow-sm">
+                    <AlertCircle size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-a2r-blue-dark mb-1">Informações do Relatório</h4>
+                    <ul className="text-xs text-slate-600 space-y-1 list-disc ml-4">
+                      <li><b>Stock Anterior:</b> Calculado até à Data de Início.</li>
+                      <li><b>Movimentos:</b> Listagem detalhada entre as datas selecionadas.</li>
+                      <li><b>Stock Final:</b> Posição de stock na Data de Fim.</li>
+                      <li><b>Ordenação:</b> O relatório será gerado seguindo a ordem escolhida (Código ou Descrição).</li>
+                    </ul>
+                  </div>
+                </div>
               </div>
             </motion.div>
           )}
@@ -5272,6 +5746,12 @@ export default function App() {
                           if (view === 'position') {
                             setPositionArticleId(art.id.toString());
                             setPositionSearchQuery(art.description);
+                          } else if (showArticleSearchFor === 'start') {
+                            setReportStartArticle(art);
+                            setShowArticleSearchFor(null);
+                          } else if (showArticleSearchFor === 'end') {
+                            setReportEndArticle(art);
+                            setShowArticleSearchFor(null);
                           } else {
                             setSelectedArticleId(art.id.toString());
                             setArticleSearchQuery(art.description);
@@ -5331,12 +5811,12 @@ export default function App() {
                   exit={{ opacity: 0, scale: 0.95 }}
                   className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden"
                 >
-                  <div className={`p-6 text-white flex justify-between items-center ${showStockEntryForm ? 'bg-emerald-500' : 'bg-red-500'}`}>
+                  <div className={`p-6 text-white flex justify-between items-center ${stockForm.type === 'IN' ? 'bg-emerald-500' : 'bg-red-500'}`}>
                     <h3 className="text-xl font-bold flex items-center gap-2">
-                      {showStockEntryForm ? <PlusCircle /> : <MinusCircle />}
-                      {showStockEntryForm ? 'Entrada de Stock' : 'Saída de Stock'}
+                      {editingStockMovement ? <Edit2 /> : (stockForm.type === 'IN' ? <PlusCircle /> : <MinusCircle />)}
+                      {editingStockMovement ? 'Editar Movimento' : (stockForm.type === 'IN' ? 'Entrada de Stock' : 'Saída de Stock')}
                     </h3>
-                    <button onClick={() => { setShowStockEntryForm(false); setShowStockExitForm(false); }} className="p-1 hover:bg-white/20 rounded-lg transition-all">
+                    <button onClick={() => { setShowStockEntryForm(false); setShowStockExitForm(false); setEditingStockMovement(null); }} className="p-1 hover:bg-white/20 rounded-lg transition-all">
                       <X size={24} />
                     </button>
                   </div>
@@ -5346,6 +5826,36 @@ export default function App() {
                       <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 mb-4">
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Artigo Selecionado</p>
                         <p className="font-bold text-slate-800">{selectedStockArticle.code} - {selectedStockArticle.description}</p>
+                      </div>
+                    )}
+
+                    {editingStockMovement && (
+                      <div className="space-y-2">
+                        <label className="block text-sm font-medium text-slate-700">Tipo de Movimento</label>
+                        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => setStockForm({...stockForm, type: 'IN'})}
+                            className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                              stockForm.type === 'IN' 
+                                ? 'bg-emerald-500 text-white shadow-sm' 
+                                : 'text-slate-500 hover:text-slate-700'
+                            }`}
+                          >
+                            ENTRADA
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setStockForm({...stockForm, type: 'OUT'})}
+                            className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                              stockForm.type === 'OUT' 
+                                ? 'bg-red-500 text-white shadow-sm' 
+                                : 'text-slate-500 hover:text-slate-700'
+                            }`}
+                          >
+                            SAÍDA
+                          </button>
+                        </div>
                       </div>
                     )}
 
@@ -5375,12 +5885,12 @@ export default function App() {
 
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">
-                        {showStockEntryForm ? 'Nº Fatura' : 'Nº Documento'}
+                        {stockForm.type === 'IN' ? 'Nº Fatura' : 'Nº Documento'}
                       </label>
                       <input 
                         type="text" 
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                        placeholder={showStockEntryForm ? 'Ex: FAT/2024/001' : 'Ex: DOC/001'}
+                        placeholder={stockForm.type === 'IN' ? 'Ex: FAT/2024/001' : 'Ex: DOC/001'}
                         value={stockForm.document_number}
                         onChange={e => setStockForm({...stockForm, document_number: e.target.value})}
                       />
@@ -5390,7 +5900,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-slate-700 mb-1">Observações / Justificação</label>
                       <textarea 
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light h-24 resize-none"
-                        placeholder={showStockEntryForm ? 'Ex: Compra de material novo...' : 'Ex: Material estragado / partido / venda...'}
+                        placeholder={stockForm.type === 'IN' ? 'Ex: Compra de material novo...' : 'Ex: Material estragado / partido / venda...'}
                         value={stockForm.observations}
                         onChange={e => setStockForm({...stockForm, observations: e.target.value})}
                       />
@@ -5400,10 +5910,10 @@ export default function App() {
                       type="submit"
                       disabled={loading}
                       className={`w-full py-3 rounded-xl text-white font-bold shadow-lg transition-all flex items-center justify-center gap-2 ${
-                        showStockEntryForm ? 'bg-emerald-500 shadow-emerald-200 hover:bg-emerald-600' : 'bg-red-500 shadow-red-200 hover:bg-red-600'
+                        stockForm.type === 'IN' ? 'bg-emerald-500 shadow-emerald-200 hover:bg-emerald-600' : 'bg-red-500 shadow-red-200 hover:bg-red-600'
                       }`}
                     >
-                      {loading ? 'A processar...' : 'Confirmar Registo'}
+                      {loading ? 'A processar...' : (editingStockMovement ? 'Atualizar Movimento' : 'Confirmar Registo')}
                     </button>
                   </form>
                 </motion.div>
