@@ -31,7 +31,8 @@ import {
   PlusCircle,
   MinusCircle,
   UserPlus,
-  Database
+  Database,
+  Share2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PhotoUpload } from './components/PhotoUpload';
@@ -985,6 +986,49 @@ export default function App() {
       showToast('Erro de ligação ao servidor.', 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleShareArticle = async (article: Article) => {
+    const shareText = `Descrição: ${article.description}
+Altura: ${article.height}
+Comprimento: ${article.length}
+Largura: ${article.width}
+Peso: ${article.weight || '0'}`;
+
+    try {
+      if (navigator.share) {
+        const shareData: any = {
+          title: `Artigo: ${article.description}`,
+          text: shareText,
+        };
+
+        // If there's a photo and it's a base64 string, try to share it as a file
+        if (article.photo && article.photo.startsWith('data:image')) {
+          try {
+            const response = await fetch(article.photo);
+            const blob = await response.blob();
+            const file = new File([blob], `${article.code}.png`, { type: blob.type });
+            
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+              shareData.files = [file];
+            }
+          } catch (e) {
+            console.error("Could not process image for sharing", e);
+          }
+        }
+
+        await navigator.share(shareData);
+      } else {
+        // Fallback: Copy to clipboard
+        await navigator.clipboard.writeText(shareText);
+        showToast('Dados do artigo copiados para a área de transferência', 'success');
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        console.error('Error sharing:', err);
+        showToast('Erro ao partilhar dados do artigo', 'error');
+      }
     }
   };
 
@@ -2279,6 +2323,13 @@ export default function App() {
                         >
                           <History size={16} />
                           <span className="text-[10px] font-bold uppercase tracking-wider">Movimentos</span>
+                        </button>
+                        <button 
+                          onClick={() => handleShareArticle(article)}
+                          className="p-1.5 rounded-xl bg-slate-50 text-slate-400 hover:text-a2r-blue-dark transition-all border border-slate-100"
+                          title="Partilhar Artigo"
+                        >
+                          <Share2 size={14} />
                         </button>
                         <button 
                           onClick={() => confirmDeleteArticle(article.id)}
