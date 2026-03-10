@@ -32,7 +32,8 @@ import {
   MinusCircle,
   UserPlus,
   Database,
-  Share2
+  Share2,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PhotoUpload } from './components/PhotoUpload';
@@ -710,6 +711,8 @@ export default function App() {
     const autoTable = (await import('jspdf-autotable')).default;
     
     const doc = new jsPDF('p', 'mm', 'a4');
+    const pageWidth = doc.internal.pageSize.width;
+    const margin = 14;
     
     // Filter articles in range based on selected order
     const filteredArticles = articles
@@ -734,78 +737,136 @@ export default function App() {
       return;
     }
 
-    // Header
-    doc.setFillColor(35, 78, 122); // a2r-blue-dark
-    doc.rect(0, 0, 210, 45, 'F');
+    // --- HEADER ---
+    doc.setFillColor(15, 23, 42); // slate-900 for a more technical look
+    doc.rect(0, 0, pageWidth, 40, 'F');
 
-    doc.setFontSize(24);
+    doc.setFontSize(22);
     doc.setTextColor(255, 255, 255);
     doc.setFont('helvetica', 'bold');
-    doc.text('Relatório de Inventário', 14, 20);
+    doc.text('RELATÓRIO DE INVENTÁRIO', margin, 18);
     
-    doc.setFontSize(10);
+    doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(200, 210, 230);
-    doc.text(`Gerado em: ${new Date().toLocaleString('pt-PT')}`, 14, 28);
-    doc.text(`Período: ${formatDateDisplay(reportStartDate)} a ${formatDateDisplay(reportEndDate)}`, 14, 33);
-    doc.text(`Intervalo (${reportOrder === 'code' ? 'Código' : 'Descrição'}): ${reportOrder === 'code' ? reportStartArticle.code : reportStartArticle.description} a ${reportOrder === 'code' ? reportEndArticle.code : reportEndArticle.description}`, 14, 38);
+    doc.setTextColor(148, 163, 184); // slate-400
+    doc.text('A2R GESTÃO DE INVENTÁRIO E LOGÍSTICA', margin, 25);
+    
+    // Header Info Box (Right side)
+    doc.setFillColor(30, 41, 59); // slate-800
+    doc.roundedRect(pageWidth - 85, 8, 75, 24, 2, 2, 'F');
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('DATA DE EMISSÃO:', pageWidth - 80, 14);
+    doc.setFont('helvetica', 'normal');
+    doc.text(new Date().toLocaleString('pt-PT'), pageWidth - 80, 18);
+    
+    doc.setFont('helvetica', 'bold');
+    doc.text('PERÍODO DO RELATÓRIO:', pageWidth - 80, 24);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`${formatDateDisplay(reportStartDate)} a ${formatDateDisplay(reportEndDate)}`, pageWidth - 80, 28);
 
-    let currentY = 55;
+    let currentY = 50;
+
+    // --- SUMMARY SECTION ---
+    doc.setFontSize(12);
+    doc.setTextColor(15, 23, 42);
+    doc.setFont('helvetica', 'bold');
+    doc.text('RESUMO DO INTERVALO', margin, currentY);
+    currentY += 6;
+
+    const summaryData = filteredArticles.map(article => {
+      const movementsBefore = stockMovements.filter(m => m.article_id === article.id && m.date < reportStartDate);
+      const initialStock = movementsBefore.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
+      
+      const movementsInPeriod = stockMovements.filter(m => m.article_id === article.id && m.date >= reportStartDate && m.date <= reportEndDate + 'T23:59:59');
+      const entries = movementsInPeriod.filter(m => m.type === 'IN').reduce((acc, m) => acc + m.quantity, 0);
+      const exits = movementsInPeriod.filter(m => m.type === 'OUT').reduce((acc, m) => acc + m.quantity, 0);
+      const finalStock = initialStock + entries - exits;
+
+      return [
+        article.code,
+        article.description.length > 40 ? article.description.substring(0, 37) + '...' : article.description,
+        initialStock.toString(),
+        entries.toString(),
+        exits.toString(),
+        finalStock.toString()
+      ];
+    });
+
+    autoTable(doc, {
+      startY: currentY,
+      head: [['Cód.', 'Descrição', 'S. Inicial', 'Entradas', 'Saídas', 'S. Final']],
+      body: summaryData,
+      theme: 'striped',
+      headStyles: { fillColor: [35, 78, 122], textColor: 255, fontSize: 8, fontStyle: 'bold' },
+      styles: { fontSize: 7, cellPadding: 2 },
+      columnStyles: {
+        0: { cellWidth: 20 },
+        1: { cellWidth: 'auto' },
+        2: { cellWidth: 18, halign: 'center' },
+        3: { cellWidth: 18, halign: 'center' },
+        4: { cellWidth: 18, halign: 'center' },
+        5: { cellWidth: 18, halign: 'center', fontStyle: 'bold' }
+      },
+      margin: { left: margin, right: margin },
+      didDrawPage: (data) => { currentY = data.cursor ? data.cursor.y : currentY; }
+    });
+
+    currentY += 15;
+
+    // --- DETAILED MOVEMENTS ---
+    doc.addPage();
+    currentY = 20;
+    
+    doc.setFontSize(14);
+    doc.setTextColor(15, 23, 42);
+    doc.setFont('helvetica', 'bold');
+    doc.text('DETALHE DE MOVIMENTOS POR ARTIGO', margin, currentY);
+    currentY += 10;
 
     for (const article of filteredArticles) {
-      // Calculate previous stock (all movements before reportStartDate)
       const movementsBefore = stockMovements.filter(m => m.article_id === article.id && m.date < reportStartDate);
       const initialStock = movementsBefore.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
 
-      // Movements in period (between reportStartDate and reportEndDate)
       const movementsInPeriod = stockMovements
         .filter(m => m.article_id === article.id && m.date >= reportStartDate && m.date <= reportEndDate + 'T23:59:59')
         .sort((a, b) => a.date.localeCompare(b.date));
 
       const finalStock = initialStock + movementsInPeriod.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
 
-      // Check if we need a new page
-      if (currentY > 240) {
+      // Check for page break before article header
+      if (currentY > 250) {
         doc.addPage();
         currentY = 20;
       }
 
+      // Article Header Card
+      doc.setFillColor(248, 250, 252); // slate-50
+      doc.setDrawColor(226, 232, 240); // slate-200
+      doc.roundedRect(margin, currentY, pageWidth - (margin * 2), 15, 1, 1, 'FD');
+      
+      doc.setFontSize(10);
+      doc.setTextColor(15, 23, 42);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`${article.code} - ${article.description}`, margin + 4, currentY + 6);
+      
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Stock Inicial: ${initialStock}`, margin + 4, currentY + 11);
+      doc.text(`Stock Final: ${finalStock}`, pageWidth - margin - 4, currentY + 11, { align: 'right' });
+
+      currentY += 15;
+
       if (movementsInPeriod.length === 0) {
-        // Compact view for articles without movements
-        doc.setFontSize(11);
-        doc.setTextColor(15, 23, 42);
-        doc.setFont('helvetica', 'bold');
-        const articleText = `Artigo: ${article.code} - ${article.description}`;
-        doc.text(articleText, 14, currentY);
-        
-        const textWidth = doc.getTextWidth(articleText);
         doc.setFontSize(8);
         doc.setFont('helvetica', 'italic');
         doc.setTextColor(148, 163, 184);
-        doc.text(' (Sem movimentos no período selecionado.)', 14 + textWidth, currentY);
-
-        doc.setFontSize(9);
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(15, 23, 42);
-        doc.text(`Stock Final em ${formatDateDisplay(reportEndDate)}: ${finalStock}`, 196, currentY, { align: 'right' });
-        
-        doc.setDrawColor(226, 232, 240);
-        doc.line(14, currentY + 4, 196, currentY + 4);
+        doc.text('Sem movimentos registados no período selecionado.', margin + 4, currentY + 6);
         currentY += 12;
       } else {
-        // Detailed view for articles with movements
-        doc.setFontSize(11);
-        doc.setTextColor(15, 23, 42);
-        doc.setFont('helvetica', 'bold');
-        doc.text(`Artigo: ${article.code} - ${article.description}`, 14, currentY);
-        
-        doc.setFontSize(9);
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(71, 85, 105);
-        doc.text(`Stock em ${formatDateDisplay(reportStartDate)}: ${initialStock}`, 196, currentY, { align: 'right' });
-        
-        currentY += 2;
-
         const tableRows = movementsInPeriod.map(m => [
           formatDateDisplay(m.date),
           m.type === 'IN' ? 'ENTRADA' : 'SAÍDA',
@@ -815,11 +876,11 @@ export default function App() {
         ]);
 
         autoTable(doc, {
-          startY: currentY,
-          head: [['Data', 'Tipo', 'Qtd', 'Documento', 'Observações']],
+          startY: currentY + 2,
+          head: [['Data', 'Operação', 'Qtd', 'Documento', 'Observações']],
           body: tableRows,
           theme: 'grid',
-          headStyles: { fillColor: [71, 85, 105], textColor: 255, fontSize: 8, halign: 'center' },
+          headStyles: { fillColor: [71, 85, 105], textColor: 255, fontSize: 7, halign: 'center' },
           columnStyles: {
             0: { cellWidth: 25, halign: 'center' },
             1: { cellWidth: 20, halign: 'center' },
@@ -827,25 +888,37 @@ export default function App() {
             3: { cellWidth: 35 },
             4: { cellWidth: 'auto' }
           },
-          styles: { fontSize: 8, cellPadding: 2 },
-          margin: { left: 14, right: 14 },
-          didDrawPage: (data) => {
-            if (data.cursor) {
-              currentY = data.cursor.y;
-            }
-          }
+          styles: { fontSize: 7, cellPadding: 1.5 },
+          margin: { left: margin + 4, right: margin + 4 },
+          didDrawPage: (data) => { currentY = data.cursor ? data.cursor.y : currentY; }
         });
-        
-        currentY += 2;
-        doc.setFontSize(9);
-        doc.setFont('helvetica', 'bold');
-        doc.setTextColor(15, 23, 42);
-        doc.text(`Stock Final em ${formatDateDisplay(reportEndDate)}: ${finalStock}`, 196, currentY + 2, { align: 'right' });
-        
-        doc.setDrawColor(226, 232, 240);
-        doc.line(14, currentY + 5, 196, currentY + 5);
-        currentY += 12;
+        currentY += 10;
       }
+    }
+
+    // --- FOOTER & SIGNATURE ---
+    if (currentY > 240) {
+      doc.addPage();
+      currentY = 20;
+    }
+    
+    currentY += 20;
+    doc.setDrawColor(203, 213, 225);
+    doc.line(margin + 20, currentY, margin + 80, currentY);
+    doc.line(pageWidth - margin - 80, currentY, pageWidth - margin - 20, currentY);
+    
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Responsável de Armazém', margin + 50, currentY + 5, { align: 'center' });
+    doc.text('Verificação / Auditoria', pageWidth - margin - 50, currentY + 5, { align: 'center' });
+
+    // Page Numbers
+    const totalPages = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`A2R Inventory System - Relatório de Inventário - Página ${i} de ${totalPages}`, pageWidth / 2, 290, { align: 'center' });
     }
 
     doc.save(`relatorio-inventario-${new Date().toISOString().split('T')[0]}.pdf`);
@@ -990,44 +1063,157 @@ export default function App() {
   };
 
   const handleShareArticle = async (article: Article) => {
-    const shareText = `Descrição: ${article.description}
-Altura: ${article.height}
-Comprimento: ${article.length}
-Largura: ${article.width}
-Peso: ${article.weight || '0'}`;
-
     try {
-      if (navigator.share) {
-        const shareData: any = {
-          title: `Artigo: ${article.description}`,
-          text: shareText,
-        };
+      showToast('A preparar imagem para partilha...', 'success');
+      
+      // Create a canvas to combine image and text
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Could not get canvas context');
 
-        // If there's a photo and it's a base64 string, try to share it as a file
-        if (article.photo && article.photo.startsWith('data:image')) {
-          try {
-            const response = await fetch(article.photo);
-            const blob = await response.blob();
-            const file = new File([blob], `${article.code}.png`, { type: blob.type });
-            
-            if (navigator.canShare && navigator.canShare({ files: [file] })) {
-              shareData.files = [file];
-            }
-          } catch (e) {
-            console.error("Could not process image for sharing", e);
-          }
+      // Load the article image
+      const loadImage = (src: string): Promise<HTMLImageElement> => {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = src;
+        });
+      };
+
+      let articleImg: HTMLImageElement | null = null;
+      if (article.photo) {
+        try {
+          articleImg = await loadImage(article.photo);
+        } catch (e) {
+          console.error("Error loading article image", e);
         }
+      }
 
-        await navigator.share(shareData);
+      // Canvas dimensions
+      const width = 800;
+      const padding = 40;
+      let currentY = padding;
+
+      // Calculate height
+      let totalHeight = padding * 2;
+      
+      // Branding height
+      totalHeight += 70;
+
+      // Image height (maintain aspect ratio)
+      let imgDisplayHeight = 0;
+      if (articleImg) {
+        const aspectRatio = articleImg.height / articleImg.width;
+        imgDisplayHeight = (width - padding * 2) * aspectRatio;
+        totalHeight += imgDisplayHeight + 30; // 30 is gap after image
+      }
+
+      // Text heights
+      totalHeight += 60; // Description
+      
+      const fields = [
+        { label: 'Altura', value: article.height, unit: 'cm' },
+        { label: 'Comprimento', value: article.length, unit: 'cm' },
+        { label: 'Largura', value: article.width, unit: 'cm' },
+        { label: 'Peso', value: article.weight, unit: 'Kg' }
+      ].filter(f => f.value && f.value > 0);
+
+      totalHeight += fields.length * 35;
+
+      canvas.width = width;
+      canvas.height = totalHeight;
+
+      // Draw background
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw Branding Header (Discrete)
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#0f172a'; // Dark slate
+      ctx.font = 'bold 20px sans-serif';
+      ctx.fillText('A2R ALL2RENT', width - padding, currentY + 20);
+      
+      ctx.fillStyle = '#94a3b8'; // Muted slate
+      ctx.font = '14px sans-serif';
+      ctx.fillText('Aluguer de tudo para eventos', width - padding, currentY + 40);
+      
+      // Small separator line
+      ctx.strokeStyle = '#f1f5f9';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padding, currentY + 55);
+      ctx.lineTo(width - padding, currentY + 55);
+      ctx.stroke();
+
+      currentY += 80;
+
+      // Draw image first
+      if (articleImg) {
+        ctx.drawImage(articleImg, padding, currentY, width - padding * 2, imgDisplayHeight);
+        currentY += imgDisplayHeight + 40;
       } else {
-        // Fallback: Copy to clipboard
-        await navigator.clipboard.writeText(shareText);
-        showToast('Dados do artigo copiados para a área de transferência', 'success');
+        // Placeholder if no image
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(padding, currentY, width - padding * 2, 400);
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = 'italic 30px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Sem imagem disponível', width / 2, currentY + 200);
+        currentY += 400 + 40;
+      }
+
+      // Draw Description
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#1e293b';
+      ctx.font = 'bold 36px sans-serif';
+      ctx.fillText(article.description.toUpperCase(), padding, currentY);
+      currentY += 50;
+
+      // Draw Info Fields
+      ctx.font = '30px sans-serif';
+      ctx.fillStyle = '#64748b';
+      
+      fields.forEach(field => {
+        ctx.font = 'bold 30px sans-serif';
+        ctx.fillStyle = '#475569';
+        const labelText = `${field.label}: `;
+        const labelWidth = ctx.measureText(labelText).width;
+        ctx.fillText(labelText, padding, currentY);
+        
+        ctx.font = '30px sans-serif';
+        ctx.fillStyle = '#1e293b';
+        ctx.fillText(`${field.value} ${field.unit}`, padding + labelWidth, currentY);
+        
+        currentY += 40;
+      });
+
+      // Convert to blob
+      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png', 1.0));
+      if (!blob) throw new Error('Could not generate image blob');
+
+      const file = new File([blob], `artigo_${article.code}.png`, { type: 'image/png' });
+
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `Artigo: ${article.description}`,
+        });
+      } else {
+        // Fallback: Download image
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `artigo_${article.code}.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('Partilha não suportada. Imagem descarregada.', 'success');
       }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         console.error('Error sharing:', err);
-        showToast('Erro ao partilhar dados do artigo', 'error');
+        showToast('Erro ao partilhar imagem do artigo', 'error');
       }
     }
   };
@@ -2240,7 +2426,7 @@ Peso: ${article.weight || '0'}`;
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+              <div className="flex-1 overflow-y-auto pr-2 space-y-1.5 custom-scrollbar">
                 {articles
                   .filter(a => {
                     const search = articleSearch.toLowerCase();
@@ -2256,84 +2442,118 @@ Peso: ${article.weight || '0'}`;
                       setEditingArticle(article);
                       setView('edit-article');
                     }}
-                    className="bg-white rounded-2xl p-3 border border-slate-100 shadow-sm hover:shadow-md transition-shadow group cursor-pointer flex items-center gap-4"
+                    className="bg-white rounded-2xl p-1.5 border border-slate-100 shadow-sm hover:shadow-xl hover:border-a2r-blue-light/30 transition-all group cursor-pointer flex flex-col sm:flex-row sm:items-center gap-2 relative overflow-hidden"
                   >
-                    <div className="w-16 h-16 rounded-xl bg-slate-50 overflow-hidden relative flex-shrink-0">
+                    {/* Decorative accent */}
+                    <div className="absolute top-0 left-0 w-1 h-full bg-a2r-blue-dark opacity-0 group-hover:opacity-100 transition-opacity" />
+                    
+                    <div className="w-full sm:w-14 sm:h-14 aspect-square rounded-xl bg-slate-50 overflow-hidden relative flex-shrink-0 border border-slate-100">
                       {article.photo ? (
-                        <img src={article.photo} alt={article.description} className="w-full h-full object-cover" />
+                        <img src={article.photo} alt={article.description} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-slate-300">
-                          <Package size={24} />
+                          <Package size={20} />
                         </div>
                       )}
                     </div>
                     
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[10px] font-bold text-slate-600 uppercase">
-                          {article.code}
-                        </span>
-                        <h3 className="font-bold text-slate-800 line-clamp-1">{article.description}</h3>
+                    <div className="flex-1 min-w-0 py-0.5">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex flex-col min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-slate-800 text-base line-clamp-1 group-hover:text-a2r-blue-dark transition-colors leading-tight">{article.description}</h3>
+                            <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[9px] font-bold text-slate-500 uppercase tracking-wider flex-shrink-0">
+                              {article.code}
+                            </span>
+                          </div>
+                          
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+                            <div className="flex items-center gap-1.5 text-slate-400">
+                              <span className="text-[10px] font-medium uppercase tracking-tight">Dimensões:</span>
+                              <span className="text-[10px] font-bold text-slate-600">{article.height}x{article.width}x{article.length} <span className="text-[9px] font-normal text-slate-400">cm</span></span>
+                            </div>
+                            {article.weight && article.weight > 0 && (
+                              <div className="flex items-center gap-1.5 text-slate-400">
+                                <span className="text-[10px] font-medium uppercase tracking-tight">Peso:</span>
+                                <span className="text-[10px] font-bold text-slate-600">{article.weight} <span className="text-[9px] font-normal text-slate-400">kg</span></span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        
+                        <div className="text-right flex-shrink-0 space-y-0.5">
+                          <div className="flex items-center justify-end gap-2">
+                            <span className="text-[9px] text-slate-400 uppercase font-bold tracking-widest leading-none">Stock Total ..</span>
+                            <span className="text-sm font-bold text-slate-600 leading-none">
+                              {article.total_stock} <span className="text-[10px] font-medium text-slate-400">un</span>
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-end gap-2">
+                            <span className="text-[9px] text-slate-400 uppercase font-bold tracking-widest leading-none">Stock Disponível ..</span>
+                            <span className={`text-sm font-black leading-none ${article.available_stock > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                              {article.available_stock} <span className="text-[10px] font-medium text-slate-400">un</span>
+                            </span>
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-400">
-                        Dim: {article.height}x{article.width}x{article.length}cm {article.weight ? `| Peso: ${article.weight}kg` : ''}
-                      </div>
-                    </div>
 
-                    <div className="text-right flex flex-col items-end gap-2">
-                      <div className="text-right leading-tight">
-                        <p className="text-[10px] text-slate-400 font-medium">Stock Total: {article.total_stock}</p>
-                        <p className={`text-sm font-bold ${article.available_stock > 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                          {article.available_stock} Disponível
-                        </p>
-                      </div>
-                      <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+                      <div className="flex flex-wrap items-center justify-end gap-1 mt-1 pt-1 border-t border-slate-50">
                         <button 
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             setSelectedStockArticle(article);
                             setStockForm(prev => ({ ...prev, type: 'IN' }));
                             setShowStockEntryForm(true);
                           }}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition-all border border-emerald-100"
+                          className="flex items-center gap-1 px-2 py-1 text-emerald-600 bg-emerald-50 hover:bg-emerald-500 hover:text-white rounded-lg transition-all border border-emerald-100 shadow-sm"
                           title="Entrada de Stock"
                         >
-                          <PlusCircle size={16} />
-                          <span className="text-[10px] font-bold uppercase tracking-wider">Entradas</span>
+                          <PlusCircle size={14} />
+                          <span className="text-[9px] font-bold uppercase tracking-wider">Entradas</span>
                         </button>
                         <button 
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             setSelectedStockArticle(article);
                             setStockForm(prev => ({ ...prev, type: 'OUT' }));
                             setShowStockExitForm(true);
                           }}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl transition-all border border-red-100"
+                          className="flex items-center gap-1 px-2 py-1 text-red-600 bg-red-50 hover:bg-red-500 hover:text-white rounded-lg transition-all border border-red-100 shadow-sm"
                           title="Saída de Stock"
                         >
-                          <MinusCircle size={16} />
-                          <span className="text-[10px] font-bold uppercase tracking-wider">Saídas</span>
+                          <MinusCircle size={14} />
+                          <span className="text-[9px] font-bold uppercase tracking-wider">Saídas</span>
                         </button>
                         <button 
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             setSelectedStockArticle(article);
                             setStockFilter('ALL');
                             setView('article-stock');
                           }}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 text-a2r-blue-dark bg-blue-50 hover:bg-blue-100 rounded-xl transition-all border border-blue-100"
+                          className="flex items-center gap-1 px-2 py-1 text-a2r-blue-dark bg-blue-50 hover:bg-a2r-blue-dark hover:text-white rounded-lg transition-all border border-blue-100 shadow-sm"
                           title="Movimentos de Stock"
                         >
-                          <History size={16} />
-                          <span className="text-[10px] font-bold uppercase tracking-wider">Movimentos</span>
+                          <History size={14} />
+                          <span className="text-[9px] font-bold uppercase tracking-wider">Movimentos</span>
                         </button>
                         <button 
-                          onClick={() => handleShareArticle(article)}
-                          className="p-1.5 rounded-xl bg-slate-50 text-slate-400 hover:text-a2r-blue-dark transition-all border border-slate-100"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleShareArticle(article);
+                          }}
+                          className="p-1.5 bg-slate-50 text-slate-400 hover:bg-slate-800 hover:text-white transition-all border border-slate-100 rounded-lg shadow-sm"
                           title="Partilhar Artigo"
                         >
                           <Share2 size={14} />
                         </button>
                         <button 
-                          onClick={() => confirmDeleteArticle(article.id)}
-                          className="p-1.5 rounded-xl bg-slate-50 text-slate-400 hover:text-red-500 transition-all border border-slate-100"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            confirmDeleteArticle(article.id);
+                          }}
+                          className="p-1.5 bg-slate-50 text-slate-400 hover:bg-red-600 hover:text-white transition-all border border-slate-100 rounded-lg shadow-sm"
+                          title="Eliminar Artigo"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -2355,8 +2575,8 @@ Peso: ${article.weight || '0'}`;
               <h2 className="text-2xl font-bold mb-6 text-slate-800 shrink-0">Editar Artigo</h2>
               <form onSubmit={handleEditArticle} className="flex flex-col h-full overflow-hidden">
                 <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-6">
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
+                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 items-end">
+                    <div className="lg:col-span-2">
                       <label className="block text-sm font-medium text-slate-700 mb-1">Código</label>
                       <input 
                         type="text" 
@@ -2368,21 +2588,63 @@ Peso: ${article.weight || '0'}`;
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Stock Total</label>
-                      <input 
-                        type="number" 
-                        disabled
-                        className="w-full px-4 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 cursor-not-allowed outline-none"
-                        value={editingArticle.total_stock ?? 0}
-                      />
+                      <div className="flex gap-1">
+                        <input 
+                          type="number" 
+                          disabled
+                          className="w-full px-3 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 cursor-not-allowed outline-none text-center"
+                          value={editingArticle.total_stock ?? 0}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const articleMovements = stockMovements.filter(m => m.article_id === editingArticle.id);
+                            const calculatedTotal = articleMovements.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
+                            setEditingArticle({...editingArticle, total_stock: calculatedTotal});
+                            showToast('Stock total recalculado com sucesso!', 'success');
+                          }}
+                          className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors shrink-0"
+                          title="Recalcular Stock Total"
+                        >
+                          <RefreshCw size={18} />
+                        </button>
+                      </div>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Stock Disponível</label>
-                      <input 
-                        type="number" 
-                        disabled
-                        className="w-full px-4 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 cursor-not-allowed outline-none"
-                        value={editingArticle.available_stock ?? 0}
-                      />
+                      <div className="flex gap-1">
+                        <input 
+                          type="number" 
+                          disabled
+                          className="w-full px-3 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 cursor-not-allowed outline-none text-center"
+                          value={editingArticle.available_stock ?? 0}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const articleMovements = stockMovements.filter(m => m.article_id === editingArticle.id);
+                            const calculatedTotal = articleMovements.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
+                            
+                            const articleOutputs = outputs.filter(o => o.items?.some(i => i.article_id === editingArticle.id));
+                            const materialNoLocal = articleOutputs.reduce((acc, o) => {
+                              const item = o.items?.find(i => i.article_id === editingArticle.id);
+                              return acc + ((item?.quantity_out || 0) - (item?.quantity_in || 0));
+                            }, 0);
+                            
+                            const calculatedAvailable = calculatedTotal - materialNoLocal;
+                            
+                            setEditingArticle({
+                              ...editingArticle, 
+                              available_stock: calculatedAvailable
+                            });
+                            showToast('Stock disponível recalculado com sucesso!', 'success');
+                          }}
+                          className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors shrink-0"
+                          title="Recalcular Stock Disponível"
+                        >
+                          <RefreshCw size={18} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div>
