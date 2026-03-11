@@ -769,57 +769,7 @@ export default function App() {
 
     let currentY = 50;
 
-    // --- SUMMARY SECTION ---
-    doc.setFontSize(12);
-    doc.setTextColor(15, 23, 42);
-    doc.setFont('helvetica', 'bold');
-    doc.text('RESUMO DO INTERVALO', margin, currentY);
-    currentY += 6;
-
-    const summaryData = filteredArticles.map(article => {
-      const movementsBefore = stockMovements.filter(m => m.article_id === article.id && m.date < reportStartDate);
-      const initialStock = movementsBefore.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
-      
-      const movementsInPeriod = stockMovements.filter(m => m.article_id === article.id && m.date >= reportStartDate && m.date <= reportEndDate + 'T23:59:59');
-      const entries = movementsInPeriod.filter(m => m.type === 'IN').reduce((acc, m) => acc + m.quantity, 0);
-      const exits = movementsInPeriod.filter(m => m.type === 'OUT').reduce((acc, m) => acc + m.quantity, 0);
-      const finalStock = initialStock + entries - exits;
-
-      return [
-        article.code,
-        article.description.length > 40 ? article.description.substring(0, 37) + '...' : article.description,
-        initialStock.toString(),
-        entries.toString(),
-        exits.toString(),
-        finalStock.toString()
-      ];
-    });
-
-    autoTable(doc, {
-      startY: currentY,
-      head: [['Cód.', 'Descrição', 'S. Inicial', 'Entradas', 'Saídas', 'S. Final']],
-      body: summaryData,
-      theme: 'striped',
-      headStyles: { fillColor: [35, 78, 122], textColor: 255, fontSize: 8, fontStyle: 'bold' },
-      styles: { fontSize: 7, cellPadding: 2 },
-      columnStyles: {
-        0: { cellWidth: 20 },
-        1: { cellWidth: 'auto' },
-        2: { cellWidth: 18, halign: 'center' },
-        3: { cellWidth: 18, halign: 'center' },
-        4: { cellWidth: 18, halign: 'center' },
-        5: { cellWidth: 18, halign: 'center', fontStyle: 'bold' }
-      },
-      margin: { left: margin, right: margin },
-      didDrawPage: (data) => { currentY = data.cursor ? data.cursor.y : currentY; }
-    });
-
-    currentY += 15;
-
     // --- DETAILED MOVEMENTS ---
-    doc.addPage();
-    currentY = 20;
-    
     doc.setFontSize(14);
     doc.setTextColor(15, 23, 42);
     doc.setFont('helvetica', 'bold');
@@ -837,15 +787,18 @@ export default function App() {
       const finalStock = initialStock + movementsInPeriod.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
 
       // Check for page break before article header
-      if (currentY > 250) {
+      if (currentY > 240) {
         doc.addPage();
         currentY = 20;
       }
 
       // Article Header Card
+      const hasMovements = movementsInPeriod.length > 0;
+      const cardHeight = hasMovements ? 9 : 14; 
+      
       doc.setFillColor(248, 250, 252); // slate-50
       doc.setDrawColor(226, 232, 240); // slate-200
-      doc.roundedRect(margin, currentY, pageWidth - (margin * 2), 15, 1, 1, 'FD');
+      doc.roundedRect(margin, currentY, pageWidth - (margin * 2), cardHeight, 1, 1, 'FD');
       
       doc.setFontSize(10);
       doc.setTextColor(15, 23, 42);
@@ -853,31 +806,38 @@ export default function App() {
       doc.text(`${article.code} - ${article.description}`, margin + 4, currentY + 6);
       
       doc.setFontSize(8);
-      doc.setFont('helvetica', 'normal');
       doc.setTextColor(100, 116, 139);
-      doc.text(`Stock Inicial: ${initialStock}`, margin + 4, currentY + 11);
-      doc.text(`Stock Final: ${finalStock}`, pageWidth - margin - 4, currentY + 11, { align: 'right' });
 
-      currentY += 15;
-
-      if (movementsInPeriod.length === 0) {
-        doc.setFontSize(8);
-        doc.setFont('helvetica', 'italic');
-        doc.setTextColor(148, 163, 184);
-        doc.text('Sem movimentos registados no período selecionado.', margin + 4, currentY + 6);
-        currentY += 12;
+      if (hasMovements) {
+        doc.setFont('helvetica', 'normal');
+        // Stock em [Data de Início] on the same line as description (right-aligned)
+        doc.text(`Stock em ${formatDateDisplay(reportStartDate)}: ${initialStock}`, pageWidth - margin - 4, currentY + 6, { align: 'right' });
+        currentY += cardHeight + 4;
       } else {
-        const tableRows = movementsInPeriod.map(m => [
-          formatDateDisplay(m.date),
-          m.type === 'IN' ? 'ENTRADA' : 'SAÍDA',
-          m.quantity.toString(),
-          m.document_number || '-',
-          m.observations || '-'
-        ]);
+        doc.setFont('helvetica', 'italic');
+        doc.text('Sem movimentos registados no período selecionado.', pageWidth - margin - 4, currentY + 6, { align: 'right' });
+        doc.setFont('helvetica', 'normal');
+        doc.text(`Stock em ${formatDateDisplay(reportEndDate)}: ${finalStock}`, pageWidth - margin - 4, currentY + 11, { align: 'right' });
+        currentY += cardHeight + 4;
+      }
+
+      if (hasMovements) {
+        let runningStock = initialStock;
+        const tableRows = movementsInPeriod.map(m => {
+          runningStock += (m.type === 'IN' ? m.quantity : -m.quantity);
+          return [
+            formatDateDisplay(m.date),
+            m.type === 'IN' ? 'ENTRADA' : 'SAÍDA',
+            m.quantity.toString(),
+            m.document_number || '-',
+            m.observations || '-',
+            runningStock.toString()
+          ];
+        });
 
         autoTable(doc, {
-          startY: currentY + 2,
-          head: [['Data', 'Operação', 'Qtd', 'Documento', 'Observações']],
+          startY: currentY - 2,
+          head: [['Data', 'Operação', 'Qtd', 'Documento', 'Observações', 'Stock']],
           body: tableRows,
           theme: 'grid',
           headStyles: { fillColor: [71, 85, 105], textColor: 255, fontSize: 7, halign: 'center' },
@@ -886,7 +846,8 @@ export default function App() {
             1: { cellWidth: 20, halign: 'center' },
             2: { cellWidth: 15, halign: 'center' },
             3: { cellWidth: 35 },
-            4: { cellWidth: 'auto' }
+            4: { cellWidth: 'auto' },
+            5: { cellWidth: 15, halign: 'center', fontStyle: 'bold' }
           },
           styles: { fontSize: 7, cellPadding: 1.5 },
           margin: { left: margin + 4, right: margin + 4 },
@@ -921,6 +882,9 @@ export default function App() {
       doc.text(`A2R Inventory System - Relatório de Inventário - Página ${i} de ${totalPages}`, pageWidth / 2, 290, { align: 'center' });
     }
 
+    const pdfBlob = doc.output('blob');
+    const pdfUrl = URL.createObjectURL(pdfBlob);
+    window.open(pdfUrl, '_blank');
     doc.save(`relatorio-inventario-${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
