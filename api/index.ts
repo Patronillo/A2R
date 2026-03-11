@@ -137,6 +137,22 @@ async function ensureSchema() {
       )
     `;
 
+    // Article Variants table
+    await sql`
+      CREATE TABLE IF NOT EXISTS article_variants (
+        id SERIAL PRIMARY KEY,
+        article_id INTEGER NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        description TEXT,
+        height FLOAT,
+        width FLOAT,
+        length FLOAT,
+        weight FLOAT,
+        photo TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+
     console.log("[DB] Schema ensured.");
   } catch (error) {
     console.error("[DB] Error ensuring schema:", error);
@@ -357,6 +373,66 @@ app.delete("/api/articles/:id", async (req, res) => {
     } else {
       res.status(404).json({ error: "Artigo não encontrado" });
     }
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Article Variants Endpoints
+app.get("/api/articles/:articleId/variants", async (req, res) => {
+  const { articleId } = req.params;
+  try {
+    const { rows } = await sql`SELECT * FROM article_variants WHERE article_id = ${articleId} ORDER BY name ASC`;
+    res.json(rows);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/article-variants", async (req, res) => {
+  const { article_id, name, description, height, width, length, weight, photo } = req.body;
+  try {
+    const h = isNaN(parseFloat(height)) ? null : parseFloat(height);
+    const w = isNaN(parseFloat(width)) ? null : parseFloat(width);
+    const l = isNaN(parseFloat(length)) ? null : parseFloat(length);
+    const wg = isNaN(parseFloat(weight)) ? null : parseFloat(weight);
+
+    const { rows } = await sql`
+      INSERT INTO article_variants (article_id, name, description, height, width, length, weight, photo)
+      VALUES (${article_id}, ${name}, ${description}, ${h}, ${w}, ${l}, ${wg}, ${photo})
+      RETURNING id
+    `;
+    res.json({ id: rows[0].id });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.put("/api/article-variants/:id", async (req, res) => {
+  const { id } = req.params;
+  const { name, description, height, width, length, weight, photo } = req.body;
+  try {
+    const h = isNaN(parseFloat(height)) ? null : parseFloat(height);
+    const w = isNaN(parseFloat(width)) ? null : parseFloat(width);
+    const l = isNaN(parseFloat(length)) ? null : parseFloat(length);
+    const wg = isNaN(parseFloat(weight)) ? null : parseFloat(weight);
+
+    await sql`
+      UPDATE article_variants 
+      SET name = ${name}, description = ${description}, height = ${h}, width = ${w}, length = ${l}, weight = ${wg}, photo = ${photo}
+      WHERE id = ${id}
+    `;
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/article-variants/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    await sql`DELETE FROM article_variants WHERE id = ${id}`;
+    res.json({ success: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }

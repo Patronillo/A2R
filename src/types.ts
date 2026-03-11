@@ -19,6 +19,19 @@ export interface Article {
   photo: string | null;
 }
 
+export interface ArticleVariant {
+  id: number;
+  article_id: number;
+  name: string;
+  description: string | null;
+  height: number | null;
+  width: number | null;
+  length: number | null;
+  weight: number | null;
+  photo: string | null;
+  created_at: string;
+}
+
 export interface StockMovement {
   id: number;
   article_id: number;

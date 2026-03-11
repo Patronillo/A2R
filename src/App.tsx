@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Article, Movement, StockMovement, Output, OutputItem, OutputType, Location, Employee } from './types';
+import { User, Article, ArticleVariant, Movement, StockMovement, Output, OutputItem, OutputType, Location, Employee } from './types';
 import { 
   Package, 
   LogOut, 
@@ -33,7 +33,9 @@ import {
   UserPlus,
   Database,
   Share2,
-  RefreshCw
+  RefreshCw,
+  Box,
+  ImageOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PhotoUpload } from './components/PhotoUpload';
@@ -284,6 +286,10 @@ export default function App() {
   // Forms
   const [newArticle, setNewArticle] = useState<Partial<Article>>({});
   const [editingArticle, setEditingArticle] = useState<Article | null>(null);
+  const [variants, setVariants] = useState<ArticleVariant[]>([]);
+  const [showVariantForm, setShowVariantForm] = useState(false);
+  const [editingVariant, setEditingVariant] = useState<ArticleVariant | null>(null);
+  const [newVariant, setNewVariant] = useState<Partial<ArticleVariant>>({});
   const [newUser, setNewUser] = useState<Partial<User>>({});
 
   // Output Form State
@@ -329,6 +335,7 @@ export default function App() {
   const [inputStatusFilter, setInputStatusFilter] = useState<'ACTIVE' | 'COMPLETED' | 'ALL'>('ACTIVE');
   const [inputStartDate, setInputStartDate] = useState('2026-01-01');
   const [inputTodayOnly, setInputTodayOnly] = useState(false);
+  const [articleEditTab, setArticleEditTab] = useState<'general' | 'variants'>('general');
   const [showArticleSearchModal, setShowArticleSearchModal] = useState(false);
   const [articleSearchQuery, setArticleSearchQuery] = useState('');
   const [historyArticleFilter, setHistoryArticleFilter] = useState('');
@@ -436,6 +443,14 @@ export default function App() {
     }
   }, [user, view]);
 
+  useEffect(() => {
+    if (editingArticle) {
+      fetchVariants(editingArticle.id);
+    } else {
+      setVariants([]);
+    }
+  }, [editingArticle]);
+
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -445,6 +460,16 @@ export default function App() {
     const res = await fetch('/api/articles');
     const data = await res.json();
     setArticles(data);
+  };
+
+  const fetchVariants = async (articleId: number) => {
+    try {
+      const res = await fetch(`/api/articles/${articleId}/variants`);
+      const data = await res.json();
+      setVariants(data);
+    } catch (e) {
+      console.error('Error fetching variants:', e);
+    }
   };
 
   const fetchLocations = async () => {
@@ -993,6 +1018,88 @@ export default function App() {
     }
   };
 
+  const handleAddVariant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingArticle || !newVariant.name) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/article-variants', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...newVariant,
+          article_id: editingArticle.id,
+          description: newVariant.description || editingArticle.description
+        })
+      });
+
+      if (res.ok) {
+        showToast('Modelo adicionado com sucesso!');
+        fetchVariants(editingArticle.id);
+        setShowVariantForm(false);
+        setNewVariant({});
+      } else {
+        showToast('Erro ao adicionar modelo', 'error');
+      }
+    } catch (err) {
+      showToast('Erro ao conectar ao servidor', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEditVariant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingVariant || !editingArticle) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/article-variants/${editingVariant.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingVariant)
+      });
+
+      if (res.ok) {
+        showToast('Modelo atualizado com sucesso!');
+        fetchVariants(editingArticle.id);
+        setEditingVariant(null);
+      } else {
+        showToast('Erro ao atualizar modelo', 'error');
+      }
+    } catch (err) {
+      showToast('Erro ao conectar ao servidor', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteVariant = async (id: number) => {
+    setConfirmModal({
+      message: 'Tem a certeza que deseja eliminar este modelo? Esta ação não pode ser desfeita.',
+      onConfirm: async () => {
+        setConfirmModal(null);
+        if (!editingArticle) return;
+
+        try {
+          const res = await fetch(`/api/article-variants/${id}`, {
+            method: 'DELETE'
+          });
+
+          if (res.ok) {
+            showToast('Modelo eliminado com sucesso!');
+            fetchVariants(editingArticle.id);
+          } else {
+            showToast('Erro ao eliminar modelo', 'error');
+          }
+        } catch (err) {
+          showToast('Erro ao conectar ao servidor', 'error');
+        }
+      }
+    });
+  };
+
   const confirmDeleteArticle = (id: number) => {
     if (!id) {
       showToast('Erro: ID do artigo não encontrado.', 'error');
@@ -1178,6 +1285,140 @@ export default function App() {
       if ((err as Error).name !== 'AbortError') {
         console.error('Error sharing:', err);
         showToast('Erro ao partilhar imagem do artigo', 'error');
+      }
+    }
+  };
+
+  const handleShareVariant = async (variant: ArticleVariant, article: Article) => {
+    try {
+      showToast('A preparar imagem para partilha...', 'success');
+      
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Could not get canvas context');
+
+      const loadImage = (src: string): Promise<HTMLImageElement> => {
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => resolve(img);
+          img.onerror = reject;
+          img.src = src;
+        });
+      };
+
+      let variantImg: HTMLImageElement | null = null;
+      if (variant.photo) {
+        try {
+          variantImg = await loadImage(variant.photo);
+        } catch (e) {
+          console.error("Error loading variant image", e);
+        }
+      }
+
+      const width = 800;
+      const padding = 40;
+      let currentY = padding;
+      let totalHeight = padding * 2 + 70; // Branding
+
+      let imgDisplayHeight = 0;
+      if (variantImg) {
+        const aspectRatio = variantImg.height / variantImg.width;
+        imgDisplayHeight = (width - padding * 2) * aspectRatio;
+        totalHeight += imgDisplayHeight + 30;
+      }
+
+      totalHeight += 60; // Description
+      
+      const fields = [
+        { label: 'Modelo', value: variant.name, unit: '' },
+        { label: 'Altura', value: variant.height, unit: 'cm' },
+        { label: 'Comprimento', value: variant.length, unit: 'cm' },
+        { label: 'Largura', value: variant.width, unit: 'cm' },
+        { label: 'Peso', value: variant.weight, unit: 'Kg' }
+      ].filter(f => f.value);
+
+      totalHeight += fields.length * 35;
+
+      canvas.width = width;
+      canvas.height = totalHeight;
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#0f172a';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.fillText('A2R ALL2RENT', width - padding, currentY + 20);
+      
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '14px sans-serif';
+      ctx.fillText('Aluguer de tudo para eventos', width - padding, currentY + 40);
+      
+      ctx.strokeStyle = '#f1f5f9';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padding, currentY + 55);
+      ctx.lineTo(width - padding, currentY + 55);
+      ctx.stroke();
+
+      currentY += 80;
+
+      if (variantImg) {
+        ctx.drawImage(variantImg, padding, currentY, width - padding * 2, imgDisplayHeight);
+        currentY += imgDisplayHeight + 40;
+      } else {
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(padding, currentY, width - padding * 2, 400);
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = 'italic 30px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Sem imagem disponível', width / 2, currentY + 200);
+        currentY += 400 + 40;
+      }
+
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#1e293b';
+      ctx.font = 'bold 36px sans-serif';
+      ctx.fillText(`${article.description}`.toUpperCase(), padding, currentY);
+      currentY += 50;
+
+      fields.forEach(field => {
+        ctx.font = 'bold 30px sans-serif';
+        ctx.fillStyle = '#475569';
+        const labelText = `${field.label}: `;
+        const labelWidth = ctx.measureText(labelText).width;
+        ctx.fillText(labelText, padding, currentY);
+        
+        ctx.font = '30px sans-serif';
+        ctx.fillStyle = '#1e293b';
+        ctx.fillText(`${field.value} ${field.unit}`, padding + labelWidth, currentY);
+        currentY += 40;
+      });
+
+      const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png', 1.0));
+      if (!blob) throw new Error('Could not generate image blob');
+
+      const file = new File([blob], `modelo_${article.code}_${variant.name}.png`, { type: 'image/png' });
+
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `Modelo: ${variant.name} (${article.code})`,
+        });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `modelo_${article.code}_${variant.name}.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('Partilha não suportada. Imagem descarregada.', 'success');
+      }
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        console.error('Error sharing variant:', err);
+        showToast('Erro ao partilhar imagem do modelo', 'error');
       }
     }
   };
@@ -2504,6 +2745,19 @@ export default function App() {
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();
+                            setEditingArticle(article);
+                            setArticleEditTab('variants');
+                            setView('edit-article');
+                          }}
+                          className="flex items-center gap-1 px-2 py-1 text-amber-600 bg-amber-50 hover:bg-amber-500 hover:text-white rounded-lg transition-all border border-amber-100 shadow-sm"
+                          title="Modelos do Artigo"
+                        >
+                          <Box size={14} />
+                          <span className="text-[9px] font-bold uppercase tracking-wider">Modelos</span>
+                        </button>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
                             handleShareArticle(article);
                           }}
                           className="p-1.5 bg-slate-50 text-slate-400 hover:bg-slate-800 hover:text-white transition-all border border-slate-100 rounded-lg shadow-sm"
@@ -2534,172 +2788,487 @@ export default function App() {
               key="edit-article"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col h-full max-w-2xl mx-auto bg-white rounded-3xl p-8 border border-slate-100 shadow-xl overflow-hidden"
+              className="flex flex-col h-full max-w-4xl mx-auto bg-white rounded-3xl p-8 border border-slate-100 shadow-xl overflow-hidden"
             >
-              <h2 className="text-2xl font-bold mb-6 text-slate-800 shrink-0">Editar Artigo</h2>
-              <form onSubmit={handleEditArticle} className="flex flex-col h-full overflow-hidden">
-                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-6">
-                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 items-end">
-                    <div className="lg:col-span-2">
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Código</label>
+              <div className="flex items-center justify-between mb-6 shrink-0">
+                <h2 className="text-2xl font-bold text-slate-800">Editar Artigo</h2>
+                <div className="flex bg-slate-100 p-1 rounded-xl">
+                  <button
+                    onClick={() => setArticleEditTab('general')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${articleEditTab === 'general' ? 'bg-white text-a2r-blue-dark shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    Dados Gerais
+                  </button>
+                  <button
+                    onClick={() => setArticleEditTab('variants')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${articleEditTab === 'variants' ? 'bg-white text-a2r-blue-dark shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    Modelos ({variants.length})
+                  </button>
+                </div>
+              </div>
+
+              {articleEditTab === 'general' ? (
+                <form onSubmit={handleEditArticle} className="flex flex-col h-full overflow-hidden">
+                  <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 items-end">
+                      <div className="lg:col-span-2">
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Código</label>
+                        <input 
+                          type="text" 
+                          required
+                          className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                          value={editingArticle.code ?? ''}
+                          onChange={e => setEditingArticle({...editingArticle, code: e.target.value})}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Stock Total</label>
+                        <div className="flex gap-1">
+                          <input 
+                            type="number" 
+                            disabled
+                            className="w-full px-3 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 cursor-not-allowed outline-none text-center"
+                            value={editingArticle.total_stock ?? 0}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const articleMovements = stockMovements.filter(m => m.article_id === editingArticle.id);
+                              const calculatedTotal = articleMovements.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
+                              setEditingArticle({...editingArticle, total_stock: calculatedTotal});
+                              showToast('Stock total recalculado com sucesso!', 'success');
+                            }}
+                            className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors shrink-0"
+                            title="Recalcular Stock Total"
+                          >
+                            <RefreshCw size={18} />
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Stock Disponível</label>
+                        <div className="flex gap-1">
+                          <input 
+                            type="number" 
+                            disabled
+                            className="w-full px-3 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 cursor-not-allowed outline-none text-center"
+                            value={editingArticle.available_stock ?? 0}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const articleMovements = stockMovements.filter(m => m.article_id === editingArticle.id);
+                              const calculatedTotal = articleMovements.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
+                              
+                              const articleOutputs = outputs.filter(o => o.items?.some(i => i.article_id === editingArticle.id));
+                              const materialNoLocal = articleOutputs.reduce((acc, o) => {
+                                const item = o.items?.find(i => i.article_id === editingArticle.id);
+                                return acc + ((item?.quantity_out || 0) - (item?.quantity_in || 0));
+                              }, 0);
+                              
+                              const calculatedAvailable = calculatedTotal - materialNoLocal;
+                              
+                              setEditingArticle({
+                                ...editingArticle, 
+                                available_stock: calculatedAvailable
+                              });
+                              showToast('Stock disponível recalculado com sucesso!', 'success');
+                            }}
+                            className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors shrink-0"
+                            title="Recalcular Stock Disponível"
+                          >
+                            <RefreshCw size={18} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Descrição</label>
                       <input 
                         type="text" 
                         required
                         className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                        value={editingArticle.code ?? ''}
-                        onChange={e => setEditingArticle({...editingArticle, code: e.target.value})}
+                        value={editingArticle.description ?? ''}
+                        onChange={e => setEditingArticle({...editingArticle, description: e.target.value})}
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Stock Total</label>
-                      <div className="flex gap-1">
+                    <div className="grid grid-cols-4 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Altura (cm)</label>
                         <input 
                           type="number" 
-                          disabled
-                          className="w-full px-3 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 cursor-not-allowed outline-none text-center"
-                          value={editingArticle.total_stock ?? 0}
+                          step="0.01"
+                          className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                          value={editingArticle.height ?? ''}
+                          onChange={e => setEditingArticle({...editingArticle, height: parseFloat(e.target.value) || 0})}
                         />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const articleMovements = stockMovements.filter(m => m.article_id === editingArticle.id);
-                            const calculatedTotal = articleMovements.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
-                            setEditingArticle({...editingArticle, total_stock: calculatedTotal});
-                            showToast('Stock total recalculado com sucesso!', 'success');
-                          }}
-                          className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors shrink-0"
-                          title="Recalcular Stock Total"
-                        >
-                          <RefreshCw size={18} />
-                        </button>
                       </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Stock Disponível</label>
-                      <div className="flex gap-1">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Largura (cm)</label>
                         <input 
                           type="number" 
-                          disabled
-                          className="w-full px-3 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 cursor-not-allowed outline-none text-center"
-                          value={editingArticle.available_stock ?? 0}
+                          step="0.01"
+                          className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                          value={editingArticle.width ?? ''}
+                          onChange={e => setEditingArticle({...editingArticle, width: parseFloat(e.target.value) || 0})}
                         />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const articleMovements = stockMovements.filter(m => m.article_id === editingArticle.id);
-                            const calculatedTotal = articleMovements.reduce((acc, m) => acc + (m.type === 'IN' ? m.quantity : -m.quantity), 0);
-                            
-                            const articleOutputs = outputs.filter(o => o.items?.some(i => i.article_id === editingArticle.id));
-                            const materialNoLocal = articleOutputs.reduce((acc, o) => {
-                              const item = o.items?.find(i => i.article_id === editingArticle.id);
-                              return acc + ((item?.quantity_out || 0) - (item?.quantity_in || 0));
-                            }, 0);
-                            
-                            const calculatedAvailable = calculatedTotal - materialNoLocal;
-                            
-                            setEditingArticle({
-                              ...editingArticle, 
-                              available_stock: calculatedAvailable
-                            });
-                            showToast('Stock disponível recalculado com sucesso!', 'success');
-                          }}
-                          className="p-2 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors shrink-0"
-                          title="Recalcular Stock Disponível"
-                        >
-                          <RefreshCw size={18} />
-                        </button>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Compr. (cm)</label>
+                        <input 
+                          type="number" 
+                          step="0.01"
+                          className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                          value={editingArticle.length ?? ''}
+                          onChange={e => setEditingArticle({...editingArticle, length: parseFloat(e.target.value) || 0})}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Peso (kg)</label>
+                        <input 
+                          type="number" 
+                          step="0.01"
+                          className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                          value={editingArticle.weight ?? ''}
+                          onChange={e => setEditingArticle({...editingArticle, weight: parseFloat(e.target.value) || 0})}
+                        />
                       </div>
                     </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Descrição</label>
-                    <input 
-                      type="text" 
-                      required
-                      className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                      value={editingArticle.description ?? ''}
-                      onChange={e => setEditingArticle({...editingArticle, description: e.target.value})}
+                    <PhotoUpload 
+                      onPhotoCapture={base64 => setEditingArticle({...editingArticle, photo: base64})}
+                      currentPhoto={editingArticle.photo}
                     />
                   </div>
-                  <div className="grid grid-cols-4 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Altura (cm)</label>
-                      <input 
-                        type="number" 
-                        step="0.01"
-                        className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                        value={editingArticle.height ?? ''}
-                        onChange={e => setEditingArticle({...editingArticle, height: parseFloat(e.target.value) || 0})}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Largura (cm)</label>
-                      <input 
-                        type="number" 
-                        step="0.01"
-                        className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                        value={editingArticle.width ?? ''}
-                        onChange={e => setEditingArticle({...editingArticle, width: parseFloat(e.target.value) || 0})}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Compr. (cm)</label>
-                      <input 
-                        type="number" 
-                        step="0.01"
-                        className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                        value={editingArticle.length ?? ''}
-                        onChange={e => setEditingArticle({...editingArticle, length: parseFloat(e.target.value) || 0})}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Peso (kg)</label>
-                      <input 
-                        type="number" 
-                        step="0.01"
-                        className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                        value={editingArticle.weight ?? ''}
-                        onChange={e => setEditingArticle({...editingArticle, weight: parseFloat(e.target.value) || 0})}
-                      />
+                  <div className="flex gap-4 pt-6 shrink-0 border-t border-slate-50 mt-auto">
+                    <button 
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        if (editingArticle?.id) {
+                          confirmDeleteArticle(editingArticle.id);
+                        }
+                      }}
+                      className="px-6 py-3 rounded-xl border border-red-200 text-red-500 font-medium hover:bg-red-50 transition-colors cursor-pointer"
+                    >
+                      Eliminar
+                    </button>
+                    <div className="flex-1 flex gap-4">
+                      <button 
+                        type="button"
+                        onClick={() => setView('articles')}
+                        className="flex-1 py-3 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50"
+                      >
+                        Cancelar
+                      </button>
+                      <button 
+                        type="submit"
+                        disabled={loading}
+                        className="flex-1 py-3 rounded-xl a2r-gradient text-white font-medium hover:opacity-90 disabled:opacity-50"
+                      >
+                        {loading ? 'A guardar...' : 'Atualizar Artigo'}
+                      </button>
                     </div>
                   </div>
-                  <PhotoUpload 
-                    onPhotoCapture={base64 => setEditingArticle({...editingArticle, photo: base64})}
-                    currentPhoto={editingArticle.photo}
-                  />
-                </div>
-                <div className="flex gap-4 pt-6 shrink-0 border-t border-slate-50 mt-auto">
-                  <button 
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      if (editingArticle?.id) {
-                        confirmDeleteArticle(editingArticle.id);
-                      }
-                    }}
-                    className="px-6 py-3 rounded-xl border border-red-200 text-red-500 font-medium hover:bg-red-50 transition-colors cursor-pointer"
-                  >
-                    Eliminar
-                  </button>
-                  <div className="flex-1 flex gap-4">
+                </form>
+              ) : (
+                <div className="flex flex-col h-full overflow-hidden">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-lg font-bold text-slate-700">Modelos do Artigo</h3>
+                    <button
+                      onClick={() => {
+                        setNewVariant({
+                          name: '',
+                          description: editingArticle.description,
+                          height: editingArticle.height,
+                          width: editingArticle.width,
+                          length: editingArticle.length,
+                          weight: editingArticle.weight,
+                          photo: ''
+                        });
+                        setShowVariantForm(true);
+                      }}
+                      className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition-all shadow-sm"
+                    >
+                      <Plus size={18} />
+                      Novo Modelo
+                    </button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4">
+                    {variants.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-slate-400 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
+                        <Box size={48} className="mb-4 opacity-20" />
+                        <p className="font-medium">Este artigo ainda não tem modelos associados.</p>
+                        <p className="text-sm">Crie variantes para diferentes tamanhos ou modelos.</p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {variants.map(variant => (
+                          <div key={variant.id} className="bg-slate-50 rounded-2xl p-4 border border-slate-100 hover:border-a2r-blue-light transition-all group">
+                            <div className="flex gap-4">
+                              <div className="w-20 h-20 rounded-xl bg-white border border-slate-100 overflow-hidden flex-shrink-0">
+                                {variant.photo ? (
+                                  <img src={variant.photo} alt={variant.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center text-slate-300">
+                                    <ImageOff size={24} />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <h4 className="font-bold text-slate-800 truncate">{variant.name}</h4>
+                                <p className="text-xs text-slate-500 line-clamp-2 mb-2">{variant.description}</p>
+                                <div className="flex flex-wrap gap-2">
+                                  <span className="text-[10px] bg-white px-2 py-0.5 rounded-md border border-slate-100 text-slate-600">
+                                    {variant.height}x{variant.width}x{variant.length} cm
+                                  </span>
+                                  {variant.weight && (
+                                    <span className="text-[10px] bg-white px-2 py-0.5 rounded-md border border-slate-100 text-slate-600">
+                                      {variant.weight} kg
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-slate-200/50">
+                              <button
+                                onClick={() => handleShareVariant(variant, editingArticle)}
+                                className="p-2 text-slate-400 hover:text-a2r-blue-dark hover:bg-white rounded-lg transition-all"
+                                title="Partilhar Modelo"
+                              >
+                                <Share2 size={16} />
+                              </button>
+                              <button
+                                onClick={() => setEditingVariant(variant)}
+                                className="p-2 text-slate-400 hover:text-a2r-blue-dark hover:bg-white rounded-lg transition-all"
+                                title="Editar Modelo"
+                              >
+                                <Edit2 size={16} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteVariant(variant.id)}
+                                className="p-2 text-slate-400 hover:text-red-500 hover:bg-white rounded-lg transition-all"
+                                title="Eliminar Modelo"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-6 shrink-0 border-t border-slate-50 mt-auto">
                     <button 
                       type="button"
                       onClick={() => setView('articles')}
-                      className="flex-1 py-3 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50"
+                      className="w-full py-3 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50"
                     >
-                      Cancelar
-                    </button>
-                    <button 
-                      type="submit"
-                      disabled={loading}
-                      className="flex-1 py-3 rounded-xl a2r-gradient text-white font-medium hover:opacity-90 disabled:opacity-50"
-                    >
-                      {loading ? 'A guardar...' : 'Atualizar Artigo'}
+                      Voltar aos Artigos
                     </button>
                   </div>
                 </div>
-              </form>
+              )}
+
+              {/* Variant Creation Modal */}
+              {showVariantForm && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+                  <motion.div 
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="bg-white rounded-3xl p-8 w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+                  >
+                    <h3 className="text-xl font-bold mb-6 text-slate-800">Novo Modelo</h3>
+                    <form onSubmit={handleAddVariant} className="flex flex-col overflow-hidden">
+                      <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Nome do Modelo</label>
+                          <input 
+                            type="text" 
+                            required
+                            placeholder="Ex: Modelo XL, Versão Luxo..."
+                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
+                            value={newVariant.name || ''}
+                            onChange={e => setNewVariant({...newVariant, name: e.target.value})}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Descrição</label>
+                          <textarea 
+                            rows={3}
+                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
+                            value={newVariant.description || ''}
+                            onChange={e => setNewVariant({...newVariant, description: e.target.value})}
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Altura (cm)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
+                              value={newVariant.height || ''}
+                              onChange={e => setNewVariant({...newVariant, height: parseFloat(e.target.value) || 0})}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Largura (cm)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
+                              value={newVariant.width || ''}
+                              onChange={e => setNewVariant({...newVariant, width: parseFloat(e.target.value) || 0})}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Comprimento (cm)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
+                              value={newVariant.length || ''}
+                              onChange={e => setNewVariant({...newVariant, length: parseFloat(e.target.value) || 0})}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Peso (kg)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
+                              value={newVariant.weight || ''}
+                              onChange={e => setNewVariant({...newVariant, weight: parseFloat(e.target.value) || 0})}
+                            />
+                          </div>
+                        </div>
+                        <PhotoUpload 
+                          onPhotoCapture={base64 => setNewVariant({...newVariant, photo: base64})}
+                          currentPhoto={newVariant.photo}
+                        />
+                      </div>
+                      <div className="flex gap-4 pt-6 mt-4 border-t border-slate-100">
+                        <button 
+                          type="button"
+                          onClick={() => setShowVariantForm(false)}
+                          className="flex-1 py-3 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50"
+                        >
+                          Cancelar
+                        </button>
+                        <button 
+                          type="submit"
+                          disabled={loading}
+                          className="flex-1 py-3 rounded-xl bg-emerald-500 text-white font-medium hover:bg-emerald-600 disabled:opacity-50"
+                        >
+                          {loading ? 'A guardar...' : 'Criar Modelo'}
+                        </button>
+                      </div>
+                    </form>
+                  </motion.div>
+                </div>
+              )}
+
+              {/* Variant Editing Modal */}
+              {editingVariant && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+                  <motion.div 
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="bg-white rounded-3xl p-8 w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+                  >
+                    <h3 className="text-xl font-bold mb-6 text-slate-800">Editar Modelo</h3>
+                    <form onSubmit={handleEditVariant} className="flex flex-col overflow-hidden">
+                      <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Nome do Modelo</label>
+                          <input 
+                            type="text" 
+                            required
+                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                            value={editingVariant.name || ''}
+                            onChange={e => setEditingVariant({...editingVariant, name: e.target.value})}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Descrição</label>
+                          <textarea 
+                            rows={3}
+                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                            value={editingVariant.description || ''}
+                            onChange={e => setEditingVariant({...editingVariant, description: e.target.value})}
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Altura (cm)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                              value={editingVariant.height || ''}
+                              onChange={e => setEditingVariant({...editingVariant, height: parseFloat(e.target.value) || 0})}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Largura (cm)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                              value={editingVariant.width || ''}
+                              onChange={e => setEditingVariant({...editingVariant, width: parseFloat(e.target.value) || 0})}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Comprimento (cm)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                              value={editingVariant.length || ''}
+                              onChange={e => setEditingVariant({...editingVariant, length: parseFloat(e.target.value) || 0})}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Peso (kg)</label>
+                            <input 
+                              type="number" 
+                              step="0.01"
+                              className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                              value={editingVariant.weight || ''}
+                              onChange={e => setEditingVariant({...editingVariant, weight: parseFloat(e.target.value) || 0})}
+                            />
+                          </div>
+                        </div>
+                        <PhotoUpload 
+                          onPhotoCapture={base64 => setEditingVariant({...editingVariant, photo: base64})}
+                          currentPhoto={editingVariant.photo}
+                        />
+                      </div>
+                      <div className="flex gap-4 pt-6 mt-4 border-t border-slate-100">
+                        <button 
+                          type="button"
+                          onClick={() => setEditingVariant(null)}
+                          className="flex-1 py-3 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50"
+                        >
+                          Cancelar
+                        </button>
+                        <button 
+                          type="submit"
+                          disabled={loading}
+                          className="flex-1 py-3 rounded-xl a2r-gradient text-white font-medium hover:opacity-90 disabled:opacity-50"
+                        >
+                          {loading ? 'A guardar...' : 'Atualizar Modelo'}
+                        </button>
+                      </div>
+                    </form>
+                  </motion.div>
+                </div>
+              )}
             </motion.div>
           )}
 
