@@ -1328,10 +1328,9 @@ export default function App() {
         totalHeight += imgDisplayHeight + 30;
       }
 
-      totalHeight += 60; // Description
+      totalHeight += 100; // Description + Variant Name
       
       const fields = [
-        { label: 'Modelo', value: variant.name, unit: '' },
         { label: 'Altura', value: variant.height, unit: 'cm' },
         { label: 'Comprimento', value: variant.length, unit: 'cm' },
         { label: 'Largura', value: variant.width, unit: 'cm' },
@@ -1381,11 +1380,16 @@ export default function App() {
       ctx.fillStyle = '#1e293b';
       ctx.font = 'bold 36px sans-serif';
       ctx.fillText(`${article.description}`.toUpperCase(), padding, currentY);
-      currentY += 50;
+      currentY += 45;
+      
+      ctx.font = 'bold 30px sans-serif';
+      ctx.fillStyle = '#64748b';
+      ctx.fillText(variant.name.toUpperCase(), padding, currentY);
+      currentY += 45;
 
       fields.forEach(field => {
         ctx.font = 'bold 30px sans-serif';
-        ctx.fillStyle = '#475569';
+        ctx.fillStyle = '#64748b';
         const labelText = `${field.label}: `;
         const labelWidth = ctx.measureText(labelText).width;
         ctx.fillText(labelText, padding, currentY);
@@ -3018,8 +3022,7 @@ export default function App() {
                                 )}
                               </div>
                               <div className="flex-1 min-w-0">
-                                <h4 className="font-bold text-slate-800 truncate">{variant.name}</h4>
-                                <p className="text-xs text-slate-500 line-clamp-2 mb-2">{variant.description}</p>
+                                <h4 className="font-bold text-slate-800 truncate mb-2">{variant.name}</h4>
                                 <div className="flex flex-wrap gap-2">
                                   <span className="text-[10px] bg-white px-2 py-0.5 rounded-md border border-slate-100 text-slate-600">
                                     {variant.height}x{variant.width}x{variant.length} cm
@@ -3085,6 +3088,16 @@ export default function App() {
                     <form onSubmit={handleAddVariant} className="flex flex-col overflow-hidden">
                       <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4">
                         <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Descrição do artigo</label>
+                          <input 
+                            type="text" 
+                            readOnly
+                            tabIndex={-1}
+                            className="w-full px-4 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 outline-none cursor-default"
+                            value={editingArticle?.description || ''}
+                          />
+                        </div>
+                        <div>
                           <label className="block text-sm font-medium text-slate-700 mb-1">Nome do Modelo</label>
                           <input 
                             type="text" 
@@ -3093,15 +3106,6 @@ export default function App() {
                             className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
                             value={newVariant.name || ''}
                             onChange={e => setNewVariant({...newVariant, name: e.target.value})}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Descrição</label>
-                          <textarea 
-                            rows={3}
-                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-emerald-500"
-                            value={newVariant.description || ''}
-                            onChange={e => setNewVariant({...newVariant, description: e.target.value})}
                           />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
@@ -3184,6 +3188,16 @@ export default function App() {
                     <form onSubmit={handleEditVariant} className="flex flex-col overflow-hidden">
                       <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4">
                         <div>
+                          <label className="block text-sm font-medium text-slate-700 mb-1">Descrição do artigo</label>
+                          <input 
+                            type="text" 
+                            readOnly
+                            tabIndex={-1}
+                            className="w-full px-4 py-2 rounded-xl border border-slate-100 bg-slate-50 text-slate-500 outline-none cursor-default"
+                            value={editingArticle?.description || ''}
+                          />
+                        </div>
+                        <div>
                           <label className="block text-sm font-medium text-slate-700 mb-1">Nome do Modelo</label>
                           <input 
                             type="text" 
@@ -3191,15 +3205,6 @@ export default function App() {
                             className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
                             value={editingVariant.name || ''}
                             onChange={e => setEditingVariant({...editingVariant, name: e.target.value})}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Descrição</label>
-                          <textarea 
-                            rows={3}
-                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
-                            value={editingVariant.description || ''}
-                            onChange={e => setEditingVariant({...editingVariant, description: e.target.value})}
                           />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
