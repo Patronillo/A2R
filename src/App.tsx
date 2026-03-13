@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Article, ArticleVariant, Movement, StockMovement, Output, OutputItem, OutputType, Location, Employee } from './types';
+import { User, Article, ArticleVariant, Movement, StockMovement, Output, OutputItem, OutputType, Location, Employee, Category } from './types';
 import { 
   Package, 
   LogOut, 
@@ -35,7 +35,8 @@ import {
   Share2,
   RefreshCw,
   Box,
-  ImageOff
+  ImageOff,
+  Layers
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PhotoUpload } from './components/PhotoUpload';
@@ -77,7 +78,7 @@ const isHoliday = (date: Date) => {
   return false;
 };
 
-type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar' | 'position' | 'article-stock' | 'inventory-report';
+type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar' | 'position' | 'article-stock' | 'inventory-report' | 'categories' | 'category-picker';
 
 const UNDEFINED_DATE = '9999-12-31T23:59';
 
@@ -278,6 +279,9 @@ export default function App() {
 
   // Search & Filters
   const [articleSearch, setArticleSearch] = useState('');
+  const [categorySearch, setCategorySearch] = useState('');
+  const [categoryPickerReturnView, setCategoryPickerReturnView] = useState<View | null>(null);
+  const [categoriesReturnView, setCategoriesReturnView] = useState<View | null>(null);
 
   // Custom Confirmation Modal State
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -291,6 +295,12 @@ export default function App() {
   const [editingVariant, setEditingVariant] = useState<ArticleVariant | null>(null);
   const [newVariant, setNewVariant] = useState<Partial<ArticleVariant>>({});
   const [newUser, setNewUser] = useState<Partial<User>>({});
+
+  // Categories State
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [showCategoryForm, setShowCategoryForm] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+  const [newCategory, setNewCategory] = useState<Partial<Category>>({ nivel: 1 });
 
   // Output Form State
   const [outputForm, setOutputForm] = useState<Partial<Output>>({
@@ -339,6 +349,9 @@ export default function App() {
   const [showArticleSearchModal, setShowArticleSearchModal] = useState(false);
   const [articleSearchQuery, setArticleSearchQuery] = useState('');
   const [historyArticleFilter, setHistoryArticleFilter] = useState('');
+  
+  const newArticleCategoryRef = React.useRef<HTMLInputElement>(null);
+  const editArticleCategoryRef = React.useRef<HTMLInputElement>(null);
   const [historyStartDate, setHistoryStartDate] = useState('2026-01-01');
   const [calendarDate, setCalendarDate] = useState(new Date().toISOString().split('T')[0]);
   const [calendarViewDate, setCalendarViewDate] = useState(new Date());
@@ -422,6 +435,17 @@ export default function App() {
     window.scrollTo(0, 0);
   }, [view]);
 
+  useEffect(() => {
+    if (view === 'add-article' && categoryPickerReturnView === 'add-article') {
+      newArticleCategoryRef.current?.focus();
+      setCategoryPickerReturnView(null);
+    }
+    if (view === 'edit-article' && categoryPickerReturnView === 'edit-article') {
+      editArticleCategoryRef.current?.focus();
+      setCategoryPickerReturnView(null);
+    }
+  }, [view, categoryPickerReturnView]);
+
   const fetchStockMovements = async () => {
     try {
       const res = await fetch('/api/stock-movements');
@@ -440,6 +464,7 @@ export default function App() {
       fetchOutputs();
       fetchMovements();
       fetchStockMovements();
+      fetchCategories();
     }
   }, [user, view]);
 
@@ -450,6 +475,33 @@ export default function App() {
       setVariants([]);
     }
   }, [editingArticle]);
+
+  const getCategoryDisplayName = (categoryId: number | null | undefined) => {
+    if (!categoryId) return '';
+    const category = categories.find(c => c.id === categoryId);
+    if (!category) return '';
+    if (category.nivel === 1) return category.nome;
+    const parent = categories.find(c => c.id === category.parent_id);
+    return parent ? `${parent.nome} ${category.nome}` : category.nome;
+  };
+
+  const getCategoryStock = (categoryId: number) => {
+    const category = categories.find(c => c.id === categoryId);
+    if (!category) return 0;
+
+    const directArticles = articles.filter(a => a.categoria_id === categoryId);
+    let total = directArticles.reduce((acc, a) => acc + (a.total_stock || 0), 0);
+
+    if (category.nivel === 1) {
+      const subfamilies = categories.filter(c => c.parent_id === categoryId);
+      subfamilies.forEach(sub => {
+        const subArticles = articles.filter(a => a.categoria_id === sub.id);
+        total += subArticles.reduce((acc, a) => acc + (a.total_stock || 0), 0);
+      });
+    }
+
+    return total;
+  };
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type });
@@ -494,6 +546,69 @@ export default function App() {
     const res = await fetch('/api/movements');
     const data = await res.json();
     setMovements(data);
+  };
+
+  const fetchCategories = async () => {
+    try {
+      const res = await fetch('/api/categories');
+      const data = await res.json();
+      setCategories(data);
+    } catch (e) {
+      console.error('Error fetching categories:', e);
+    }
+  };
+
+  const handleCategorySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const url = editingCategory ? `/api/categories/${editingCategory.id}` : '/api/categories';
+      const method = editingCategory ? 'PUT' : 'POST';
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingCategory || newCategory)
+      });
+
+      if (response.ok) {
+        showToast(editingCategory ? 'Categoria atualizada!' : 'Categoria criada!');
+        setShowCategoryForm(false);
+        setEditingCategory(null);
+        setNewCategory({ nivel: 1 });
+        fetchCategories();
+      } else {
+        const data = await response.json();
+        showToast(data.error || 'Erro ao processar categoria', 'error');
+      }
+    } catch (e) {
+      showToast('Erro de conexão', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteCategory = async (id: number) => {
+    setConfirmModal({
+      message: 'Tem a certeza que deseja eliminar esta categoria?',
+      onConfirm: async () => {
+        setConfirmModal(null);
+        setLoading(true);
+        try {
+          const response = await fetch(`/api/categories/${id}`, { method: 'DELETE' });
+          if (response.ok) {
+            showToast('Categoria eliminada!');
+            fetchCategories();
+          } else {
+            const data = await response.json();
+            showToast(data.error || 'Erro ao eliminar categoria', 'error');
+          }
+        } catch (e) {
+          showToast('Erro de conexão', 'error');
+        } finally {
+          setLoading(false);
+        }
+      }
+    });
   };
 
   const handleStockMovement = async (e: React.FormEvent) => {
@@ -637,8 +752,8 @@ export default function App() {
           const date = new Date(h.date);
           const start = new Date(historyStartDate);
           const matchesDate = date >= start;
-          const matchesArticle = h.article_description.toLowerCase().includes(historyArticleFilter.toLowerCase()) ||
-                               h.article_code.toLowerCase().includes(historyArticleFilter.toLowerCase());
+          const matchesArticle = (h.article_description?.toLowerCase() || '').includes(historyArticleFilter.toLowerCase()) ||
+                               (h.article_code?.toLowerCase() || '').includes(historyArticleFilter.toLowerCase());
           return matchesDate && matchesArticle;
         })
         .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
@@ -745,8 +860,8 @@ export default function App() {
         if (reportOrder === 'code') {
           return a.code >= reportStartArticle.code && a.code <= reportEndArticle.code;
         } else {
-          return a.description.toLowerCase() >= reportStartArticle.description.toLowerCase() && 
-                 a.description.toLowerCase() <= reportEndArticle.description.toLowerCase();
+          return (a.description?.toLowerCase() || '') >= (reportStartArticle.description?.toLowerCase() || '') && 
+                 (a.description?.toLowerCase() || '') <= (reportEndArticle.description?.toLowerCase() || '');
         }
       })
       .sort((a, b) => {
@@ -828,7 +943,8 @@ export default function App() {
       doc.setFontSize(10);
       doc.setTextColor(15, 23, 42);
       doc.setFont('helvetica', 'bold');
-      doc.text(`${article.code} - ${article.description}`, margin + 4, currentY + 6);
+      const categoryText = article.categoria_id ? ` [${getCategoryDisplayName(article.categoria_id)}]` : '';
+      doc.text(`${article.code} - ${article.description}${categoryText}`, margin + 4, currentY + 6);
       
       doc.setFontSize(8);
       doc.setTextColor(100, 116, 139);
@@ -913,6 +1029,113 @@ export default function App() {
     doc.save(`relatorio-inventario-${new Date().toISOString().split('T')[0]}.pdf`);
   };
 
+  const generateCategoriesReportPDF = async () => {
+    const doc = new jsPDF('p', 'mm', 'a4');
+    const pageWidth = doc.internal.pageSize.width;
+    const margin = 14;
+    
+    const search = categorySearch.toLowerCase();
+    const filteredFamilies = categories
+      .filter(c => c.nivel === 1)
+      .filter(family => {
+        if (!search) return true;
+        const familyMatch = family.nome.toLowerCase().includes(search) || family.codigo.toLowerCase().includes(search);
+        const subfamilies = categories.filter(c => c.parent_id === family.id);
+        const subMatch = subfamilies.some(sub => sub.nome.toLowerCase().includes(search) || sub.codigo.toLowerCase().includes(search));
+        return familyMatch || subMatch;
+      });
+
+    // --- HEADER ---
+    doc.setFillColor(15, 23, 42); 
+    doc.rect(0, 0, pageWidth, 40, 'F');
+
+    doc.setFontSize(22);
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.text('RELATÓRIO DE FAMÍLIAS', margin, 18);
+    
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(148, 163, 184); 
+    doc.text('A2R GESTÃO DE INVENTÁRIO E LOGÍSTICA', margin, 25);
+    
+    doc.setFillColor(30, 41, 59); 
+    doc.roundedRect(pageWidth - 85, 8, 75, 24, 2, 2, 'F');
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('DATA DE EMISSÃO:', pageWidth - 80, 14);
+    doc.setFont('helvetica', 'normal');
+    doc.text(new Date().toLocaleString('pt-PT'), pageWidth - 80, 18);
+    
+    if (search) {
+      doc.setFont('helvetica', 'bold');
+      doc.text('FILTRO:', pageWidth - 80, 24);
+      doc.setFont('helvetica', 'normal');
+      doc.text(categorySearch, pageWidth - 80, 28);
+    }
+
+    let currentY = 50;
+
+    const tableData: any[] = [];
+    filteredFamilies.forEach(family => {
+      // Add Family Row
+      tableData.push([
+        { content: family.codigo, styles: { fontStyle: 'bold', fillColor: [241, 245, 249] } },
+        { content: family.nome, styles: { fontStyle: 'bold', fillColor: [241, 245, 249] } },
+        { content: 'Família Principal', styles: { fontStyle: 'italic', fillColor: [241, 245, 249] } },
+        { content: `${getCategoryStock(family.id)} un.`, styles: { fontStyle: 'bold', halign: 'right', fillColor: [241, 245, 249] } }
+      ]);
+
+      const subfamilies = categories
+        .filter(c => c.parent_id === family.id)
+        .filter(sub => {
+          if (!search) return true;
+          const familyMatch = family.nome.toLowerCase().includes(search) || family.codigo.toLowerCase().includes(search);
+          const subMatch = sub.nome.toLowerCase().includes(search) || sub.codigo.toLowerCase().includes(search);
+          return familyMatch || subMatch;
+        });
+
+      subfamilies.forEach(sub => {
+        tableData.push([
+          `  ${sub.codigo}`,
+          `  ${sub.nome}`,
+          'Subfamília',
+          { content: `${getCategoryStock(sub.id)} un.`, styles: { halign: 'right' } }
+        ]);
+      });
+    });
+
+    autoTable(doc, {
+      startY: currentY,
+      head: [['Código', 'Nome / Descrição', 'Nível', 'Stock Total']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [71, 85, 105], textColor: 255, fontSize: 9, halign: 'center' },
+      styles: { fontSize: 8, cellPadding: 3 },
+      columnStyles: {
+        0: { cellWidth: 30 },
+        1: { cellWidth: 'auto' },
+        2: { cellWidth: 40, halign: 'center' },
+        3: { cellWidth: 30, halign: 'right' }
+      },
+      margin: { left: margin, right: margin }
+    });
+
+    const totalPages = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`A2R Inventory System - Relatório de Famílias - Página ${i} de ${totalPages}`, pageWidth / 2, 290, { align: 'center' });
+    }
+
+    const pdfBlob = doc.output('blob');
+    const pdfUrl = URL.createObjectURL(pdfBlob);
+    window.open(pdfUrl, '_blank');
+  };
+
   const handleLogin = async (e?: React.FormEvent) => {
     e?.preventDefault();
     setError('');
@@ -958,6 +1181,11 @@ export default function App() {
 
   const handleAddArticle = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!newArticle.categoria_id) {
+      showToast('Por favor selecione uma Família / Subfamília válida', 'error');
+      newArticleCategoryRef.current?.focus();
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch('/api/articles', {
@@ -1001,6 +1229,11 @@ export default function App() {
   const handleEditArticle = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingArticle) return;
+    if (!editingArticle.categoria_id) {
+      showToast('Por favor selecione uma Família / Subfamília válida', 'error');
+      editArticleCategoryRef.current?.focus();
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch(`/api/articles/${editingArticle.id}`, {
@@ -2456,7 +2689,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`max-w-5xl w-full mx-auto p-6 pt-24 pb-24 ${['outputs', 'inputs', 'articles', 'article-stock', 'history', 'calendar', 'position'].includes(view) && !showOutputForm && !showInputForm ? 'h-screen overflow-hidden flex flex-col' : ''}`}>
+      <main className={`max-w-5xl w-full mx-auto p-6 pt-24 pb-24 ${['outputs', 'inputs', 'articles', 'article-stock', 'history', 'calendar', 'position', 'category-picker', 'categories'].includes(view) && !showOutputForm && !showInputForm ? 'h-screen overflow-hidden flex flex-col' : ''}`}>
         <AnimatePresence mode="wait">
           {view === 'menu' && (
             <motion.div
@@ -2606,6 +2839,16 @@ export default function App() {
                     Relatório Inventário
                   </button>
                   <button 
+                    onClick={() => {
+                      setCategoriesReturnView('articles');
+                      setView('categories');
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition-all shadow-sm"
+                  >
+                    <Layers size={18} />
+                    Famílias
+                  </button>
+                  <button 
                     onClick={openAddArticle}
                     className="flex items-center gap-2 px-4 py-2 a2r-gradient text-white rounded-xl font-medium shadow-lg shadow-blue-200"
                   >
@@ -2639,8 +2882,8 @@ export default function App() {
                 {articles
                   .filter(a => {
                     const search = articleSearch.toLowerCase();
-                    return a.code.toLowerCase().includes(search) || 
-                           a.description.toLowerCase().includes(search) ||
+                    return (a.code?.toLowerCase() || '').includes(search) || 
+                           (a.description?.toLowerCase() || '').includes(search) ||
                            `${a.height}x${a.width}x${a.length}`.includes(search) ||
                            (a.weight && a.weight.toString().includes(search));
                   })
@@ -2674,6 +2917,11 @@ export default function App() {
                             <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[9px] font-bold text-slate-500 uppercase tracking-wider flex-shrink-0">
                               {article.code}
                             </span>
+                            {article.categoria_id && (
+                              <span className="px-1.5 py-0.5 bg-blue-50 rounded text-[9px] font-bold text-a2r-blue-dark uppercase tracking-wider flex-shrink-0 border border-blue-100">
+                                {getCategoryDisplayName(article.categoria_id)}
+                              </span>
+                            )}
                           </div>
                           
                           <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
@@ -2896,6 +3144,48 @@ export default function App() {
                         value={editingArticle.description ?? ''}
                         onChange={e => setEditingArticle({...editingArticle, description: e.target.value})}
                       />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-1 uppercase tracking-widest ml-1">Família / SubFamília</label>
+                      <div className="flex gap-2">
+                        <div className="flex-1">
+                          <Combobox 
+                            value={getCategoryDisplayName(editingArticle.categoria_id)}
+                            onChange={(val) => {
+                              const cat = categories.find(c => getCategoryDisplayName(c.id) === val);
+                              setEditingArticle({...editingArticle, categoria_id: cat ? cat.id : null});
+                            }}
+                            options={categories.map(c => getCategoryDisplayName(c.id))}
+                            placeholder="Pesquisar Família..."
+                            className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                            listId="edit-article-category"
+                            inputRef={editArticleCategoryRef}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCategoryPickerReturnView('edit-article');
+                            setCategorySearch('');
+                            setView('category-picker');
+                          }}
+                          className="p-2 bg-slate-100 text-slate-500 rounded-xl hover:bg-a2r-blue-dark hover:text-white transition-all shadow-sm border border-slate-200"
+                          title="Selecionar na Lista"
+                        >
+                          <Search size={20} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCategoriesReturnView('edit-article');
+                            setView('categories');
+                          }}
+                          className="p-2 bg-slate-100 text-slate-500 rounded-xl hover:bg-a2r-blue-dark hover:text-white transition-all shadow-sm border border-slate-200"
+                          title="Gerir Famílias"
+                        >
+                          <Layers size={20} />
+                        </button>
+                      </div>
                     </div>
                     <div className="grid grid-cols-4 gap-4">
                       <div>
@@ -4196,7 +4486,7 @@ export default function App() {
                       value={positionSearchQuery}
                       onChange={e => {
                         setPositionSearchQuery(e.target.value);
-                        const exactMatch = articles.find(a => a.code.toLowerCase() === e.target.value.toLowerCase());
+                        const exactMatch = articles.find(a => (a.code?.toLowerCase() || '') === e.target.value.toLowerCase());
                         if (exactMatch) {
                           setPositionArticleId(exactMatch.id.toString());
                           setPositionSearchQuery(exactMatch.description);
@@ -4207,8 +4497,8 @@ export default function App() {
                       <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border border-slate-100 shadow-2xl z-50 max-h-60 overflow-y-auto">
                         {articles
                           .filter(a => 
-                            a.code.toLowerCase().includes(positionSearchQuery.toLowerCase()) || 
-                            a.description.toLowerCase().includes(positionSearchQuery.toLowerCase())
+                            (a.code?.toLowerCase() || '').includes(positionSearchQuery.toLowerCase()) || 
+                            (a.description?.toLowerCase() || '').includes(positionSearchQuery.toLowerCase())
                           )
                           .map(art => (
                             <button
@@ -4475,8 +4765,8 @@ export default function App() {
                       const date = new Date(h.date);
                       const start = new Date(historyStartDate);
                       const matchesDate = date >= start;
-                      const matchesArticle = h.article_description.toLowerCase().includes(historyArticleFilter.toLowerCase()) ||
-                                           h.article_code.toLowerCase().includes(historyArticleFilter.toLowerCase());
+                      const matchesArticle = (h.article_description?.toLowerCase() || '').includes(historyArticleFilter.toLowerCase()) ||
+                                           (h.article_code?.toLowerCase() || '').includes(historyArticleFilter.toLowerCase());
                       return matchesDate && matchesArticle;
                     })
                     .sort((a, b) => {
@@ -4906,7 +5196,7 @@ export default function App() {
                       const activeOutputs = outputs.filter(o => {
                         const isSettled = o.items?.every(item => item.quantity_out === item.quantity_in);
                         const isActive = !isSettled;
-                        const matchesSearch = o.client_name.toLowerCase().includes(inputSearch.toLowerCase()) || 
+                        const matchesSearch = (o.client_name?.toLowerCase() || '').includes(inputSearch.toLowerCase()) || 
                                             o.location_name?.toLowerCase().includes(inputSearch.toLowerCase());
                         
                         const today = new Date().toISOString().split('T')[0];
@@ -4925,7 +5215,7 @@ export default function App() {
                         if (!outputId) return;
                         
                         const relatedOutput = outputs.find(o => o.id === outputId);
-                        const matchesSearch = (relatedOutput?.client_name.toLowerCase().includes(inputSearch.toLowerCase()) || 
+                        const matchesSearch = ((relatedOutput?.client_name?.toLowerCase() || '').includes(inputSearch.toLowerCase()) || 
                                              relatedOutput?.location_name?.toLowerCase().includes(inputSearch.toLowerCase()) ||
                                              (m.article_description?.toLowerCase().includes(inputSearch.toLowerCase()) || false));
                         
@@ -5549,7 +5839,7 @@ export default function App() {
                                       onChange={e => {
                                         setArticleSearchQuery(e.target.value);
                                         // If user types something that matches exactly a code, select it
-                                        const exactMatch = articles.find(a => a.code.toLowerCase() === e.target.value.toLowerCase());
+                                        const exactMatch = articles.find(a => (a.code?.toLowerCase() || '') === e.target.value.toLowerCase());
                                         if (exactMatch) {
                                           setSelectedArticleId(exactMatch.id.toString());
                                           setArticleSearchQuery(exactMatch.description);
@@ -5560,8 +5850,8 @@ export default function App() {
                                       <div className="absolute z-20 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-60 overflow-y-auto">
                                         {articles
                                           .filter(a => 
-                                            a.code.toLowerCase().includes(articleSearchQuery.toLowerCase()) || 
-                                            a.description.toLowerCase().includes(articleSearchQuery.toLowerCase())
+                                            (a.code?.toLowerCase() || '').includes(articleSearchQuery.toLowerCase()) || 
+                                            (a.description?.toLowerCase() || '').includes(articleSearchQuery.toLowerCase())
                                           )
                                           .map(art => (
                                             <button
@@ -5793,7 +6083,7 @@ export default function App() {
                   <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
                     {outputs
                       .filter(o => {
-                        const matchesSearch = o.client_name.toLowerCase().includes(outputSearch.toLowerCase()) || 
+                        const matchesSearch = (o.client_name?.toLowerCase() || '').includes(outputSearch.toLowerCase()) || 
                                             o.location_name?.toLowerCase().includes(outputSearch.toLowerCase());
                         
                         const today = new Date().toISOString().split('T')[0];
@@ -6032,6 +6322,48 @@ export default function App() {
                       value={newArticle.description || ''}
                       onChange={e => setNewArticle({...newArticle, description: e.target.value})}
                     />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-slate-700 mb-1 uppercase tracking-widest ml-1">Família / SubFamília</label>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <Combobox 
+                          value={getCategoryDisplayName(newArticle.categoria_id)}
+                          onChange={(val) => {
+                            const cat = categories.find(c => getCategoryDisplayName(c.id) === val);
+                            setNewArticle({...newArticle, categoria_id: cat ? cat.id : null});
+                          }}
+                          options={categories.map(c => getCategoryDisplayName(c.id))}
+                          placeholder="Pesquisar Família..."
+                          className="w-full px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light"
+                          listId="new-article-category"
+                          inputRef={newArticleCategoryRef}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCategoryPickerReturnView('add-article');
+                          setCategorySearch('');
+                          setView('category-picker');
+                        }}
+                        className="p-2 bg-slate-100 text-slate-500 rounded-xl hover:bg-a2r-blue-dark hover:text-white transition-all shadow-sm border border-slate-200"
+                        title="Selecionar na Lista"
+                      >
+                        <Search size={20} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCategoriesReturnView('add-article');
+                          setView('categories');
+                        }}
+                        className="p-2 bg-slate-100 text-slate-500 rounded-xl hover:bg-a2r-blue-dark hover:text-white transition-all shadow-sm border border-slate-200"
+                        title="Gerir Famílias"
+                      >
+                        <Layers size={20} />
+                      </button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 gap-4">
                     <div>
@@ -6444,6 +6776,437 @@ export default function App() {
               </div>
             </motion.div>
           )}
+
+          {view === 'category-picker' && (
+            <motion.div
+              key="category-picker"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="flex flex-col flex-1 min-h-0 space-y-6"
+            >
+              <div className="flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-4">
+                  <button 
+                    onClick={() => {
+                      if (categoryPickerReturnView) setView(categoryPickerReturnView);
+                      else setView('menu');
+                    }}
+                    className="p-2.5 bg-white text-slate-400 hover:text-slate-600 rounded-2xl transition-all border border-slate-100 shadow-sm"
+                  >
+                    <ChevronDown className="rotate-90" size={24} />
+                  </button>
+                  <h2 className="text-2xl font-bold text-slate-800">Selecionar Família</h2>
+                </div>
+                <button 
+                  onClick={() => setView('menu')}
+                  className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="flex flex-col md:flex-row gap-4 shrink-0">
+                <div className="relative flex-1">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input 
+                    type="text" 
+                    placeholder="Pesquisar por código ou nome..."
+                    className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 bg-white focus:ring-2 focus:ring-a2r-blue-light outline-none"
+                    value={categorySearch}
+                    autoFocus
+                    onChange={e => setCategorySearch(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar">
+                {categories
+                  .filter(c => c.nivel === 1)
+                  .filter(family => {
+                    const s = categorySearch.toLowerCase();
+                    const familyMatches = (family.nome?.toLowerCase() || '').includes(s) || 
+                                         (family.codigo?.toLowerCase() || '').includes(s);
+                    
+                    const subfamiliesMatch = categories.some(sub => 
+                      sub.parent_id === family.id && 
+                      ((sub.nome?.toLowerCase() || '').includes(s) || 
+                       (sub.codigo?.toLowerCase() || '').includes(s))
+                    );
+                    
+                    return familyMatches || subfamiliesMatch;
+                  })
+                  .map(family => (
+                    <div key={family.id} className="space-y-2">
+                      <div 
+                        onClick={() => {
+                          if (categoryPickerReturnView === 'add-article') {
+                            setNewArticle({...newArticle, categoria_id: family.id});
+                          } else if (categoryPickerReturnView === 'edit-article' && editingArticle) {
+                            setEditingArticle({...editingArticle, categoria_id: family.id});
+                          }
+                          setView(categoryPickerReturnView || 'menu');
+                        }}
+                        className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm hover:shadow-md hover:border-a2r-blue-light/30 transition-all cursor-pointer flex items-center justify-between group"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="px-2 py-1 bg-slate-100 text-slate-600 text-[10px] font-bold rounded border border-slate-200 uppercase tracking-widest">
+                            {family.codigo}
+                          </span>
+                          <span className="font-bold text-slate-800">{family.nome}</span>
+                        </div>
+                        <ChevronRight size={18} className="text-slate-300 group-hover:text-a2r-blue-dark transition-colors" />
+                      </div>
+
+                      <div className="ml-8 space-y-1.5 border-l-2 border-slate-100 pl-4">
+                        {categories
+                          .filter(c => c.parent_id === family.id)
+                          .filter(sub => {
+                            const s = categorySearch.toLowerCase();
+                            const familyMatches = (family.nome?.toLowerCase() || '').includes(s) || 
+                                                 (family.codigo?.toLowerCase() || '').includes(s);
+                            const subMatches = (sub.nome?.toLowerCase() || '').includes(s) || 
+                                              (sub.codigo?.toLowerCase() || '').includes(s);
+                            return familyMatches || subMatches;
+                          })
+                          .map(sub => (
+                            <div 
+                              key={sub.id}
+                              onClick={() => {
+                                if (categoryPickerReturnView === 'add-article') {
+                                  setNewArticle({...newArticle, categoria_id: sub.id});
+                                } else if (categoryPickerReturnView === 'edit-article' && editingArticle) {
+                                  setEditingArticle({...editingArticle, categoria_id: sub.id});
+                                }
+                                setView(categoryPickerReturnView || 'menu');
+                              }}
+                              className="bg-slate-50/50 rounded-xl p-3 border border-slate-100 hover:bg-white hover:shadow-sm hover:border-a2r-blue-light/20 transition-all cursor-pointer flex items-center justify-between group"
+                            >
+                              <div className="flex items-center gap-3">
+                                <span className="text-[10px] font-mono text-slate-400">
+                                  {sub.codigo}
+                                </span>
+                                <span className="text-sm font-medium text-slate-700">{family.nome} {sub.nome}</span>
+                              </div>
+                              <CheckCircle2 size={16} className="text-slate-200 group-hover:text-emerald-500 transition-colors" />
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  ))}
+                
+                {categories.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                    <Layers size={48} className="mb-4 opacity-20" />
+                    <p className="font-medium">Nenhuma categoria encontrada</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-2 shrink-0">
+                <button
+                  onClick={() => {
+                    if (categoryPickerReturnView === 'add-article') {
+                      setNewArticle({...newArticle, categoria_id: null});
+                    } else if (categoryPickerReturnView === 'edit-article' && editingArticle) {
+                      setEditingArticle({...editingArticle, categoria_id: null});
+                    }
+                    setView(categoryPickerReturnView || 'menu');
+                  }}
+                  className="w-full py-4 bg-white border-2 border-dashed border-slate-200 text-slate-500 rounded-2xl font-bold hover:bg-slate-50 hover:border-slate-300 transition-all"
+                >
+                  Limpar Seleção de Família
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {view === 'categories' && (
+            <motion.div
+              key="categories"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="flex flex-col flex-1 min-h-0 space-y-6"
+            >
+              <div className="flex items-center justify-between shrink-0">
+                <h2 className="text-2xl font-bold text-slate-800">Famílias de Artigos</h2>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={generateCategoriesReportPDF}
+                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition-all shadow-sm"
+                  >
+                    <FileText size={18} />
+                    Relatório
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setEditingCategory(null);
+                      setNewCategory({ nivel: 1 });
+                      setShowCategoryForm(true);
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 a2r-gradient text-white rounded-xl font-medium shadow-lg shadow-blue-200"
+                  >
+                    <Plus size={18} />
+                    Nova Família
+                  </button>
+                  <button 
+                    onClick={() => {
+                      if (categoriesReturnView) {
+                        setView(categoriesReturnView);
+                        setCategoriesReturnView(null);
+                        fetchCategories();
+                      } else {
+                        setView('menu');
+                      }
+                    }}
+                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Filter */}
+              <div className="relative shrink-0">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                <input 
+                  type="text"
+                  placeholder="Pesquisar por família ou subfamília..."
+                  value={categorySearch}
+                  onChange={(e) => setCategorySearch(e.target.value)}
+                  className="w-full pl-12 pr-4 py-3 bg-white rounded-2xl border border-slate-100 shadow-sm outline-none focus:ring-2 focus:ring-a2r-blue-light transition-all font-medium text-slate-700"
+                />
+                {categorySearch && (
+                  <button 
+                    onClick={() => setCategorySearch('')}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+                  >
+                    <X size={18} />
+                  </button>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar pb-20">
+                <div className="grid grid-cols-1 gap-6">
+                  {categories
+                    .filter(c => c.nivel === 1)
+                    .filter(family => {
+                      const search = categorySearch.toLowerCase();
+                      if (!search) return true;
+                      
+                      const familyMatch = family.nome.toLowerCase().includes(search) || family.codigo.toLowerCase().includes(search);
+                      const subfamilies = categories.filter(c => c.parent_id === family.id);
+                      const subMatch = subfamilies.some(sub => sub.nome.toLowerCase().includes(search) || sub.codigo.toLowerCase().includes(search));
+                      
+                      return familyMatch || subMatch;
+                    })
+                    .map(family => (
+                      <div key={family.id} className="group bg-white rounded-[2rem] border border-slate-100 shadow-sm hover:shadow-md transition-all duration-300 overflow-hidden">
+                        {/* Family Header */}
+                        <div className="p-5 flex justify-between items-center bg-gradient-to-r from-slate-50 to-white border-b border-slate-100">
+                          <div className="flex items-center gap-4 flex-1">
+                            <div className="w-12 h-12 rounded-2xl bg-slate-800 flex items-center justify-center text-white shadow-lg shadow-slate-200 group-hover:scale-110 transition-transform duration-300">
+                              <span className="text-sm font-bold tracking-tighter">{family.codigo}</span>
+                            </div>
+                            <div className="flex-1 flex justify-between items-center pr-4">
+                              <div>
+                                <h3 className="text-lg font-bold text-slate-800 group-hover:text-a2r-blue-dark transition-colors">{family.nome}</h3>
+                                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Família Principal</p>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-sm font-bold text-slate-600 bg-slate-100 px-3 py-1 rounded-full">
+                                  {getCategoryStock(family.id)} un.
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => {
+                                setEditingCategory(null);
+                                setNewCategory({ nivel: 2, parent_id: family.id });
+                                setShowCategoryForm(true);
+                              }}
+                              className="p-2.5 text-emerald-600 hover:bg-emerald-50 rounded-xl transition-all"
+                              title="Adicionar Subfamília"
+                            >
+                              <Plus size={20} />
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setEditingCategory(family);
+                                setShowCategoryForm(true);
+                              }}
+                              className="p-2.5 text-slate-400 hover:text-a2r-blue-dark hover:bg-blue-50 rounded-xl transition-all"
+                              title="Editar"
+                            >
+                              <Edit size={20} />
+                            </button>
+                            <button 
+                              onClick={() => handleDeleteCategory(family.id)}
+                              className="p-2.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                              title="Eliminar"
+                            >
+                              <Trash2 size={20} />
+                            </button>
+                          </div>
+                        </div>
+                        
+                        {/* Subfamilies List */}
+                        <div className="p-2 space-y-1 bg-white">
+                          {categories
+                            .filter(c => c.parent_id === family.id)
+                            .filter(sub => {
+                              const search = categorySearch.toLowerCase();
+                              if (!search) return true;
+                              // If family matches, show all subfamilies, OR if subfamily itself matches
+                              const familyMatch = family.nome.toLowerCase().includes(search) || family.codigo.toLowerCase().includes(search);
+                              const subMatch = sub.nome.toLowerCase().includes(search) || sub.codigo.toLowerCase().includes(search);
+                              return familyMatch || subMatch;
+                            })
+                            .map((sub, idx, arr) => (
+                          <div key={sub.id} className="relative group/sub">
+                            {/* Tree Line */}
+                            <div className="absolute left-6 top-0 bottom-0 w-px bg-slate-100"></div>
+                            {idx === arr.length - 1 && (
+                              <div className="absolute left-6 bottom-1/2 top-0 w-px bg-slate-100"></div>
+                            )}
+                            
+                            <div className="ml-6 pl-6 py-3 pr-4 flex justify-between items-center rounded-2xl hover:bg-slate-50 transition-all duration-200">
+                              {/* Horizontal Tree Line */}
+                              <div className="absolute left-6 top-1/2 w-4 h-px bg-slate-100"></div>
+                              
+                              <div className="flex items-center gap-3 flex-1">
+                                <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-slate-500 text-[10px] font-bold group-hover/sub:bg-a2r-blue-light/20 group-hover/sub:text-a2r-blue-dark transition-colors">
+                                  {sub.codigo}
+                                </div>
+                                <div className="flex-1 flex justify-between items-center pr-4">
+                                  <span className="font-semibold text-slate-700 group-hover/sub:text-slate-900 transition-colors">
+                                    {sub.nome}
+                                  </span>
+                                  <span className="text-xs font-bold text-slate-400">
+                                    {getCategoryStock(sub.id)} un.
+                                  </span>
+                                </div>
+                              </div>
+                              
+                              <div className="flex gap-1 opacity-0 group-hover/sub:opacity-100 transition-opacity">
+                                <button 
+                                  onClick={() => {
+                                    setEditingCategory(sub);
+                                    setShowCategoryForm(true);
+                                  }}
+                                  className="p-1.5 text-slate-400 hover:text-a2r-blue-dark hover:bg-blue-50 rounded-lg transition-all"
+                                >
+                                  <Edit size={16} />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeleteCategory(sub.id)}
+                                  className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        
+                        {categories.filter(c => c.parent_id === family.id).length === 0 && (
+                          <div className="ml-12 py-4 text-[11px] text-slate-400 italic flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 rounded-full bg-slate-200"></div>
+                            Nenhuma subfamília registada.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {categories.filter(c => c.nivel === 1).length === 0 && (
+                  <div className="text-center py-24 bg-white rounded-[3rem] border-2 border-dashed border-slate-100">
+                    <div className="w-24 h-24 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <Layers size={48} className="text-slate-200" />
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-800 mb-2">Sem Famílias</h3>
+                    <p className="text-slate-400 font-medium max-w-xs mx-auto">Comece por criar a sua primeira família de artigos para organizar o seu inventário.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Category Form Modal */}
+              {showCategoryForm && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                  <motion.div 
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md overflow-hidden"
+                  >
+                    <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+                      <h3 className="text-xl font-bold text-slate-800 font-display">
+                        {editingCategory ? 'Editar' : 'Nova'} { (editingCategory?.nivel === 2 || newCategory.nivel === 2) ? 'Subfamília' : 'Família' }
+                      </h3>
+                      <button onClick={() => setShowCategoryForm(false)} className="text-slate-400 hover:text-slate-600">
+                        <X size={24} />
+                      </button>
+                    </div>
+                    
+                    <form onSubmit={handleCategorySubmit} className="p-8 space-y-6">
+                      {newCategory.nivel === 2 && !editingCategory && (
+                        <div>
+                          <label className="block text-sm font-bold text-slate-700 mb-2 uppercase tracking-widest">Família Pai</label>
+                          <select 
+                            className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light bg-slate-50 font-medium"
+                            value={newCategory.parent_id || ''}
+                            onChange={e => setNewCategory({...newCategory, parent_id: parseInt(e.target.value)})}
+                            required
+                          >
+                            <option value="">Selecione uma família...</option>
+                            {categories.filter(c => c.nivel === 1).map(f => (
+                              <option key={f.id} value={f.id}>{f.codigo} - {f.nome}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 mb-2 uppercase tracking-widest">Nome</label>
+                        <input 
+                          type="text"
+                          autoFocus
+                          required
+                          className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium"
+                          placeholder="Ex: Mobiliário, Cadeiras, etc."
+                          value={editingCategory ? editingCategory.nome : (newCategory.nome || '')}
+                          onChange={e => {
+                            if (editingCategory) setEditingCategory({...editingCategory, nome: e.target.value});
+                            else setNewCategory({...newCategory, nome: e.target.value});
+                          }}
+                        />
+                      </div>
+
+                      <div className="flex gap-4 pt-4">
+                        <button 
+                          type="button"
+                          onClick={() => setShowCategoryForm(false)}
+                          className="flex-1 px-6 py-3 rounded-2xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-all"
+                        >
+                          Cancelar
+                        </button>
+                        <button 
+                          type="submit"
+                          disabled={loading}
+                          className="flex-1 px-6 py-3 rounded-2xl a2r-gradient text-white font-bold shadow-lg shadow-blue-200 hover:opacity-90 transition-all disabled:opacity-50"
+                        >
+                          {loading ? 'A processar...' : 'Guardar'}
+                        </button>
+                      </div>
+                    </form>
+                  </motion.div>
+                </div>
+              )}
+            </motion.div>
+          )}
         </AnimatePresence>
       </main>
 
@@ -6587,8 +7350,8 @@ export default function App() {
                 <div className="space-y-3">
                   {articles
                     .filter(a => 
-                      a.code.toLowerCase().includes(articleSearchQuery.toLowerCase()) || 
-                      a.description.toLowerCase().includes(articleSearchQuery.toLowerCase())
+                      (a.code?.toLowerCase() || '').includes(articleSearchQuery.toLowerCase()) || 
+                      (a.description?.toLowerCase() || '').includes(articleSearchQuery.toLowerCase())
                     )
                     .map(art => (
                       <button
@@ -6851,14 +7614,16 @@ function Combobox({
   options, 
   placeholder, 
   className,
-  listId 
+  listId,
+  inputRef
 }: { 
   value: string, 
   onChange: (val: string) => void, 
   options: string[], 
   placeholder?: string, 
   className?: string,
-  listId: string
+  listId: string,
+  inputRef?: React.RefObject<HTMLInputElement | null>
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState(value);
@@ -6881,12 +7646,13 @@ function Combobox({
   // Show all options if search matches current value exactly or is empty
   const filteredOptions = (search === value || !search) 
     ? options 
-    : options.filter(opt => opt.toLowerCase().includes(search.toLowerCase()));
+    : options.filter(opt => (opt?.toLowerCase() || '').includes(search.toLowerCase()));
 
   return (
     <div className="relative" ref={containerRef}>
       <div className="relative">
         <input
+          ref={inputRef}
           type="text"
           value={search}
           onChange={(e) => {

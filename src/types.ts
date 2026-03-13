@@ -17,6 +17,17 @@ export interface Article {
   length: number;
   weight: number;
   photo: string | null;
+  categoria_id: number | null;
+  categoria_nome?: string;
+  categoria_codigo?: string;
+}
+
+export interface Category {
+  id: number;
+  codigo: string;
+  nome: string;
+  nivel: number;
+  parent_id: number | null;
 }
 
 export interface ArticleVariant {

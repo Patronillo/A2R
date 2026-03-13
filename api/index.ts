@@ -153,6 +153,24 @@ async function ensureSchema() {
       )
     `;
 
+    // Categories table
+    await sql`
+      CREATE TABLE IF NOT EXISTS categories (
+        id SERIAL PRIMARY KEY,
+        codigo TEXT UNIQUE NOT NULL,
+        nome TEXT NOT NULL,
+        nivel INTEGER NOT NULL,
+        parent_id INTEGER REFERENCES categories(id) ON DELETE RESTRICT
+      )
+    `;
+
+    // Add categoria_id to articles if it doesn't exist
+    try {
+      await sql`ALTER TABLE articles ADD COLUMN IF NOT EXISTS categoria_id INTEGER REFERENCES categories(id) ON DELETE SET NULL`;
+    } catch (e) {
+      // Column might already exist
+    }
+
     console.log("[DB] Schema ensured.");
   } catch (error) {
     console.error("[DB] Error ensuring schema:", error);
@@ -306,7 +324,12 @@ app.post("/api/auth/reset-pin", async (req, res) => {
 // Articles Endpoints
 app.get("/api/articles", async (req, res) => {
   try {
-    const { rows } = await sql`SELECT * FROM articles ORDER BY description ASC`;
+    const { rows } = await sql`
+      SELECT a.*, c.nome as categoria_nome, c.codigo as categoria_codigo 
+      FROM articles a
+      LEFT JOIN categories c ON a.categoria_id = c.id
+      ORDER BY a.description ASC
+    `;
     res.json(rows);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -314,17 +337,18 @@ app.get("/api/articles", async (req, res) => {
 });
 
 app.post("/api/articles", async (req, res) => {
-  const { code, description, total_stock, height, width, length, weight, photo } = req.body;
+  const { code, description, total_stock, height, width, length, weight, photo, categoria_id } = req.body;
   try {
     const h = isNaN(parseFloat(height)) ? null : parseFloat(height);
     const w = isNaN(parseFloat(width)) ? null : parseFloat(width);
     const l = isNaN(parseFloat(length)) ? null : parseFloat(length);
     const wg = isNaN(parseFloat(weight)) ? null : parseFloat(weight);
     const ts = isNaN(parseInt(total_stock)) ? 0 : parseInt(total_stock);
+    const catId = categoria_id ? parseInt(categoria_id) : null;
 
     const { rows } = await sql`
-      INSERT INTO articles (code, description, total_stock, available_stock, height, width, length, weight, photo)
-      VALUES (${code}, ${description}, ${ts}, ${ts}, ${h}, ${w}, ${l}, ${wg}, ${photo})
+      INSERT INTO articles (code, description, total_stock, available_stock, height, width, length, weight, photo, categoria_id)
+      VALUES (${code}, ${description}, ${ts}, ${ts}, ${h}, ${w}, ${l}, ${wg}, ${photo}, ${catId})
       RETURNING id
     `;
     res.json({ id: rows[0].id });
@@ -336,7 +360,7 @@ app.post("/api/articles", async (req, res) => {
 
 app.put("/api/articles/:id", async (req, res) => {
   const { id } = req.params;
-  const { code, description, total_stock, height, width, length, weight, photo } = req.body;
+  const { code, description, total_stock, height, width, length, weight, photo, categoria_id } = req.body;
   
   try {
     const { rows } = await sql`SELECT * FROM articles WHERE id = ${id}`;
@@ -351,10 +375,11 @@ app.put("/api/articles/:id", async (req, res) => {
     const w = isNaN(parseFloat(width)) ? null : parseFloat(width);
     const l = isNaN(parseFloat(length)) ? null : parseFloat(length);
     const wg = isNaN(parseFloat(weight)) ? null : parseFloat(weight);
+    const catId = categoria_id ? parseInt(categoria_id) : null;
 
     await sql`
       UPDATE articles 
-      SET code = ${code}, description = ${description}, total_stock = ${ts}, available_stock = ${newAvailable}, height = ${h}, width = ${w}, length = ${l}, weight = ${wg}, photo = ${photo}
+      SET code = ${code}, description = ${description}, total_stock = ${ts}, available_stock = ${newAvailable}, height = ${h}, width = ${w}, length = ${l}, weight = ${wg}, photo = ${photo}, categoria_id = ${catId}
       WHERE id = ${id}
     `;
     res.json({ success: true });
@@ -432,6 +457,96 @@ app.delete("/api/article-variants/:id", async (req, res) => {
   const { id } = req.params;
   try {
     await sql`DELETE FROM article_variants WHERE id = ${id}`;
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// Categories Endpoints
+app.get("/api/categories", async (req, res) => {
+  try {
+    const { rows } = await sql`SELECT * FROM categories ORDER BY codigo ASC`;
+    res.json(rows);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/categories", async (req, res) => {
+  const { nome, nivel, parent_id } = req.body;
+  try {
+    let codigo = "";
+    if (nivel === 1) {
+      // Generate family code: 0001, 0002...
+      const { rows } = await sql`SELECT codigo FROM categories WHERE nivel = 1 ORDER BY codigo DESC LIMIT 1`;
+      if (rows.length === 0) {
+        codigo = "0001";
+      } else {
+        const lastNum = parseInt(rows[0].codigo);
+        codigo = (lastNum + 1).toString().padStart(4, '0');
+      }
+    } else {
+      // Generate subfamily code: 0001.0001, 0001.0002...
+      if (!parent_id) return res.status(400).json({ error: "Parent ID is required for subfamilies" });
+      
+      const { rows: parentRows } = await sql`SELECT codigo FROM categories WHERE id = ${parent_id}`;
+      if (parentRows.length === 0) return res.status(400).json({ error: "Parent category not found" });
+      
+      const parentCode = parentRows[0].codigo;
+      const { rows: subRows } = await sql`
+        SELECT codigo FROM categories 
+        WHERE nivel = 2 AND parent_id = ${parent_id} 
+        ORDER BY codigo DESC LIMIT 1
+      `;
+      
+      if (subRows.length === 0) {
+        codigo = `${parentCode}.0001`;
+      } else {
+        const lastPart = subRows[0].codigo.split('.')[1];
+        const nextNum = parseInt(lastPart) + 1;
+        codigo = `${parentCode}.${nextNum.toString().padStart(4, '0')}`;
+      }
+    }
+
+    const { rows } = await sql`
+      INSERT INTO categories (codigo, nome, nivel, parent_id)
+      VALUES (${codigo}, ${nome}, ${nivel}, ${parent_id || null})
+      RETURNING id, codigo
+    `;
+    res.json(rows[0]);
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.put("/api/categories/:id", async (req, res) => {
+  const { id } = req.params;
+  const { nome } = req.body;
+  try {
+    await sql`UPDATE categories SET nome = ${nome} WHERE id = ${id}`;
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/categories/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Check if it has subfamilies
+    const { rows: subRows } = await sql`SELECT id FROM categories WHERE parent_id = ${id}`;
+    if (subRows.length > 0) {
+      return res.status(400).json({ error: "Não é possível apagar uma família que contém subfamílias." });
+    }
+
+    // Check if any article uses it
+    const { rows: artRows } = await sql`SELECT id FROM articles WHERE categoria_id = ${id}`;
+    if (artRows.length > 0) {
+      return res.status(400).json({ error: "Não é possível apagar uma categoria que está a ser utilizada por artigos." });
+    }
+
+    await sql`DELETE FROM categories WHERE id = ${id}`;
     res.json({ success: true });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
