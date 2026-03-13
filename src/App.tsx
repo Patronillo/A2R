@@ -78,7 +78,7 @@ const isHoliday = (date: Date) => {
   return false;
 };
 
-type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar' | 'position' | 'article-stock' | 'inventory-report' | 'categories' | 'category-picker';
+type View = 'login' | 'menu' | 'articles' | 'register-user' | 'add-article' | 'edit-article' | 'forgot-pin' | 'outputs' | 'inputs' | 'history' | 'calendar' | 'position' | 'article-stock' | 'inventory-report' | 'categories' | 'category-picker' | 'users-management';
 
 const UNDEFINED_DATE = '9999-12-31T23:59';
 
@@ -296,6 +296,14 @@ export default function App() {
   const [newVariant, setNewVariant] = useState<Partial<ArticleVariant>>({});
   const [newUser, setNewUser] = useState<Partial<User>>({});
 
+  // User Management State
+  const [users, setUsers] = useState<User[]>([]);
+  const [userManagementSearch, setUserManagementSearch] = useState('');
+  const [userStatusFilter, setUserStatusFilter] = useState<'all' | 'active' | 'inactive'>('active');
+  const [showUserManagementForm, setShowUserManagementForm] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [userMovementsCount, setUserMovementsCount] = useState<Record<number, boolean>>({});
+
   // Categories State
   const [categories, setCategories] = useState<Category[]>([]);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
@@ -373,6 +381,12 @@ export default function App() {
   const timelineRef = React.useRef<HTMLDivElement>(null);
 
   const articleCodeInputRef = React.useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (view === 'users-management') {
+      fetchUsers();
+    }
+  }, [view]);
 
   useEffect(() => {
     if (showOutputForm) {
@@ -512,6 +526,101 @@ export default function App() {
     const res = await fetch('/api/articles');
     const data = await res.json();
     setArticles(data);
+  };
+
+  const fetchUsers = async () => {
+    try {
+      const res = await fetch('/api/users');
+      const data = await res.json();
+      setUsers(data);
+      
+      // Check movements for each user to determine if they can be deleted
+      const movementsCheck: Record<number, boolean> = {};
+      // This is a bit heavy, but for a small number of users it's fine
+      // In a real app we'd have a specific endpoint for this
+      setUserMovementsCount({});
+    } catch (e) {
+      console.error('Error fetching users:', e);
+    }
+  };
+
+  const handleUserSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const url = editingUser ? `/api/users/${editingUser.id}` : '/api/users';
+      const method = editingUser ? 'PUT' : 'POST';
+      
+      const userData = editingUser || newUser;
+      
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userData)
+      });
+
+      if (response.ok) {
+        showToast(editingUser ? 'Utilizador atualizado!' : 'Utilizador criado!');
+        setShowUserManagementForm(false);
+        setEditingUser(null);
+        setNewUser({});
+        fetchUsers();
+      } else {
+        const data = await response.json();
+        showToast(data.error || 'Erro ao processar utilizador', 'error');
+      }
+    } catch (e) {
+      showToast('Erro de conexão', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteUser = async (id: number) => {
+    setConfirmModal({
+      message: 'Tem a certeza que deseja eliminar este utilizador?',
+      onConfirm: async () => {
+        setConfirmModal(null);
+        setLoading(true);
+        try {
+          const response = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+          if (response.ok) {
+            showToast('Utilizador eliminado!');
+            fetchUsers();
+          } else {
+            const data = await response.json();
+            showToast(data.error || 'Erro ao eliminar utilizador', 'error');
+          }
+        } catch (e) {
+          showToast('Erro de conexão', 'error');
+        } finally {
+          setLoading(false);
+        }
+      }
+    });
+  };
+
+  const handleToggleUserStatus = async (userToToggle: User) => {
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/users/${userToToggle.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...userToToggle, active: !userToToggle.active })
+      });
+
+      if (response.ok) {
+        showToast(userToToggle.active ? 'Utilizador desativado!' : 'Utilizador ativado!');
+        fetchUsers();
+      } else {
+        const data = await response.json();
+        showToast(data.error || 'Erro ao alterar estado do utilizador', 'error');
+      }
+    } catch (e) {
+      showToast('Erro de conexão', 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fetchVariants = async (articleId: number) => {
@@ -2705,7 +2814,12 @@ export default function App() {
                   <h2 className="text-3xl font-bold text-slate-900 tracking-tight font-display">
                     Olá, <span className="a2r-text-gradient">{user?.name.split(' ')[0]}</span>!
                   </h2>
-                  <p className="text-slate-500 font-medium">Painel de Controlo A2R Logística</p>
+                  <p 
+                    className="text-slate-500 font-medium cursor-pointer hover:text-a2r-blue-dark transition-colors"
+                    onClick={() => setView('users-management')}
+                  >
+                    Painel de Controlo A2R Logística
+                  </p>
                 </div>
                 <div className="bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-3">
                   <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
@@ -6918,6 +7032,249 @@ export default function App() {
                   Limpar Seleção de Família
                 </button>
               </div>
+            </motion.div>
+          )}
+
+          {view === 'users-management' && (
+            <motion.div
+              key="users-management"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="flex flex-col flex-1 min-h-0 space-y-6"
+            >
+              <div className="flex items-center justify-between shrink-0">
+                <h2 className="text-2xl font-bold text-slate-800">Gestão de Utilizadores</h2>
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => {
+                      setEditingUser(null);
+                      setNewUser({ active: true });
+                      setShowUserManagementForm(true);
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 a2r-gradient text-white rounded-xl font-medium shadow-lg shadow-blue-200"
+                  >
+                    <Plus size={18} />
+                    Novo Utilizador
+                  </button>
+                  <button 
+                    onClick={() => setView('menu')}
+                    className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    <X size={24} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col md:flex-row gap-4 shrink-0">
+                <div className="relative flex-1">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input 
+                    type="text" 
+                    placeholder="Pesquisar por nome ou email..."
+                    className="w-full pl-12 pr-4 py-3 rounded-2xl border border-slate-200 bg-white focus:ring-2 focus:ring-a2r-blue-light outline-none"
+                    value={userManagementSearch}
+                    onChange={e => setUserManagementSearch(e.target.value)}
+                  />
+                </div>
+                <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200">
+                  {(['all', 'active', 'inactive'] as const).map((status) => (
+                    <button
+                      key={status}
+                      onClick={() => setUserStatusFilter(status)}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all uppercase tracking-wider ${
+                        userStatusFilter === status 
+                          ? 'bg-white text-slate-800 shadow-sm' 
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      {status === 'all' ? 'Todos' : status === 'active' ? 'Ativos' : 'Desativos'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 space-y-3 custom-scrollbar pb-20">
+                {users
+                  .filter(u => {
+                    const s = userManagementSearch.toLowerCase();
+                    const matchesSearch = (u.name?.toLowerCase() || '').includes(s) || 
+                                         (u.email?.toLowerCase() || '').includes(s);
+                    
+                    if (userStatusFilter === 'active') return matchesSearch && u.active;
+                    if (userStatusFilter === 'inactive') return matchesSearch && !u.active;
+                    return matchesSearch;
+                  })
+                  .map(u => (
+                    <div key={u.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm hover:shadow-md transition-all flex items-center justify-between group">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400 overflow-hidden">
+                          {u.photo ? (
+                            <img src={u.photo} alt={u.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <UserIcon size={24} />
+                          )}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-slate-800">{u.name}</h3>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
+                              u.active ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'
+                            }`}>
+                              {u.active ? 'Ativo' : 'Desativo'}
+                            </span>
+                          </div>
+                          <p className="text-sm text-slate-500">{u.email}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={() => handleToggleUserStatus(u)}
+                          className={`p-2 rounded-xl transition-all ${
+                            u.active ? 'text-slate-400 hover:text-amber-500 hover:bg-amber-50' : 'text-slate-400 hover:text-emerald-500 hover:bg-emerald-50'
+                          }`}
+                          title={u.active ? 'Desativar' : 'Ativar'}
+                        >
+                          <RefreshCw size={20} className={!u.active ? 'rotate-180' : ''} />
+                        </button>
+                        <button 
+                          onClick={() => {
+                            setEditingUser(u);
+                            setShowUserManagementForm(true);
+                          }}
+                          className="p-2 text-slate-400 hover:text-a2r-blue-dark hover:bg-blue-50 rounded-xl transition-all"
+                          title="Editar"
+                        >
+                          <Edit size={20} />
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteUser(u.id)}
+                          className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                          title="Eliminar"
+                        >
+                          <Trash2 size={20} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                {users.length === 0 && (
+                  <div className="text-center py-20 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+                    <UserIcon size={48} className="mx-auto text-slate-300 mb-4" />
+                    <p className="text-slate-500 font-medium">Nenhum utilizador encontrado.</p>
+                  </div>
+                )}
+              </div>
+
+              {/* User Form Modal */}
+              {showUserManagementForm && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+                  <motion.div 
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md overflow-hidden"
+                  >
+                    <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+                      <h3 className="text-xl font-bold text-slate-800 font-display">
+                        {editingUser ? 'Editar Utilizador' : 'Novo Utilizador'}
+                      </h3>
+                      <button onClick={() => setShowUserManagementForm(false)} className="text-slate-400 hover:text-slate-600">
+                        <X size={24} />
+                      </button>
+                    </div>
+                    
+                    <form onSubmit={handleUserSubmit} className="p-8 space-y-4">
+                      <div className="flex justify-center mb-6">
+                        <PhotoUpload 
+                          currentPhoto={editingUser ? editingUser.photo : (newUser.photo || null)}
+                          onPhotoCapture={(photo) => {
+                            if (editingUser) setEditingUser({...editingUser, photo});
+                            else setNewUser({...newUser, photo});
+                          }}
+                          label="Foto do Utilizador"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Nome Completo</label>
+                        <input 
+                          type="text"
+                          required
+                          className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium"
+                          value={editingUser ? editingUser.name : (newUser.name || '')}
+                          onChange={e => {
+                            if (editingUser) setEditingUser({...editingUser, name: e.target.value});
+                            else setNewUser({...newUser, name: e.target.value});
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Email</label>
+                        <input 
+                          type="email"
+                          required
+                          className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium"
+                          value={editingUser ? editingUser.email : (newUser.email || '')}
+                          onChange={e => {
+                            if (editingUser) setEditingUser({...editingUser, email: e.target.value});
+                            else setNewUser({...newUser, email: e.target.value});
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">PIN (4 dígitos)</label>
+                        <input 
+                          type="password"
+                          maxLength={4}
+                          required={!editingUser}
+                          placeholder={editingUser ? "Deixe em branco para manter" : "****"}
+                          className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium"
+                          value={editingUser ? (editingUser.pin === '****' ? '' : editingUser.pin) : (newUser.pin || '')}
+                          onChange={e => {
+                            const val = e.target.value.replace(/\D/g, '').slice(0, 4);
+                            if (editingUser) setEditingUser({...editingUser, pin: val});
+                            else setNewUser({...newUser, pin: val});
+                          }}
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-3 pt-2">
+                        <input 
+                          type="checkbox"
+                          id="user-active"
+                          className="w-5 h-5 rounded border-slate-300 text-a2r-blue-dark focus:ring-a2r-blue-light"
+                          checked={editingUser ? editingUser.active : (newUser.active ?? true)}
+                          onChange={e => {
+                            if (editingUser) setEditingUser({...editingUser, active: e.target.checked});
+                            else setNewUser({...newUser, active: e.target.checked});
+                          }}
+                        />
+                        <label htmlFor="user-active" className="text-sm font-bold text-slate-700 cursor-pointer">Utilizador Ativo</label>
+                      </div>
+
+                      <div className="flex gap-4 pt-6">
+                        <button 
+                          type="button"
+                          onClick={() => setShowUserManagementForm(false)}
+                          className="flex-1 px-6 py-3 rounded-2xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-all"
+                        >
+                          Cancelar
+                        </button>
+                        <button 
+                          type="submit"
+                          disabled={loading}
+                          className="flex-1 px-6 py-3 rounded-2xl a2r-gradient text-white font-bold shadow-lg shadow-blue-200 hover:opacity-90 transition-all disabled:opacity-50"
+                        >
+                          {loading ? 'A processar...' : 'Guardar'}
+                        </button>
+                      </div>
+                    </form>
+                  </motion.div>
+                </div>
+              )}
             </motion.div>
           )}
 

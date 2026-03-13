@@ -4,6 +4,7 @@ export interface User {
   email: string;
   photo: string | null;
   pin: string;
+  active: boolean;
 }
 
 export interface Article {

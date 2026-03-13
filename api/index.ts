@@ -31,9 +31,17 @@ async function ensureSchema() {
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
         photo TEXT,
-        pin TEXT NOT NULL
+        pin TEXT NOT NULL,
+        active BOOLEAN DEFAULT TRUE
       )
     `;
+
+    // Add active column if it doesn't exist
+    try {
+      await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE`;
+    } catch (e) {
+      // Column might already exist
+    }
 
     // Articles table
     await sql`
@@ -255,10 +263,52 @@ app.post("/api/users", async (req, res) => {
 
 app.get("/api/users", async (req, res) => {
   try {
-    const { rows } = await sql`SELECT id, name, email, photo FROM users`;
+    const { rows } = await sql`SELECT id, name, email, photo, active FROM users ORDER BY name ASC`;
     res.json(rows);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.put("/api/users/:id", async (req, res) => {
+  const { id } = req.params;
+  const { name, email, photo, pin, active } = req.body;
+  try {
+    if (pin) {
+      await sql`
+        UPDATE users 
+        SET name = ${name}, email = ${email}, photo = ${photo}, pin = ${pin}, active = ${active}
+        WHERE id = ${id}
+      `;
+    } else {
+      await sql`
+        UPDATE users 
+        SET name = ${name}, email = ${email}, photo = ${photo}, active = ${active}
+        WHERE id = ${id}
+      `;
+    }
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete("/api/users/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Check for movements
+    const { rows: smRows } = await sql`SELECT id FROM stock_movements WHERE user_id = ${id} LIMIT 1`;
+    const { rows: mRows } = await sql`SELECT id FROM movements WHERE user_id = ${id} LIMIT 1`;
+    const { rows: oRows } = await sql`SELECT id FROM outputs WHERE user_id = ${id} LIMIT 1`;
+
+    if (smRows.length > 0 || mRows.length > 0 || oRows.length > 0) {
+      return res.status(400).json({ error: "Não é possível eliminar um utilizador que possui movimentos ou registos associados. Considere desativar o utilizador." });
+    }
+
+    await sql`DELETE FROM users WHERE id = ${id}`;
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(400).json({ error: e.message });
   }
 });
 
