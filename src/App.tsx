@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Article, ArticleVariant, Movement, StockMovement, Output, OutputItem, OutputType, Location, Employee, Category } from './types';
+import { User, Article, ArticleVariant, Movement, StockMovement, Output, OutputItem, OutputType, Location, Employee, Category, UserRole } from './types';
 import { 
   Package, 
   LogOut, 
@@ -36,7 +36,8 @@ import {
   RefreshCw,
   Box,
   ImageOff,
-  Layers
+  Layers,
+  Mail
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PhotoUpload } from './components/PhotoUpload';
@@ -259,6 +260,8 @@ const StockTimeline = ({ article, outputs, timelineRef }: { article: Article, ou
 export default function App() {
   const [view, setView] = useState<View>('login');
   const [user, setUser] = useState<User | null>(null);
+  const [systemUser, setSystemUser] = useState<User | null>(null);
+  const [isEditingUser, setIsEditingUser] = useState(false);
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [articles, setArticles] = useState<Article[]>([]);
@@ -268,14 +271,29 @@ export default function App() {
   const [movements, setMovements] = useState<Movement[]>([]); // Recolhas
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+  const [toast, setToast] = useState<{message: string, type: 'success' | 'error' | 'warning'} | null>(null);
   const [confirmModal, setConfirmModal] = useState<{message: string, onConfirm: () => void} | null>(null);
 
   // Forgot PIN State
   const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotCode, setForgotCode] = useState('');
-  const [newPin, setNewPin] = useState('');
+  const [forgotQuestion, setForgotQuestion] = useState('');
+  const [forgotAnswer, setForgotAnswer] = useState('');
+  const [recoveryUser, setRecoveryUser] = useState<User | null>(null);
   const [forgotStep, setForgotStep] = useState<1 | 2 | 3>(1);
+
+  // Permission helper
+  const can = (action: 'view' | 'create' | 'edit' | 'delete' | 'share') => {
+    if (!systemUser) return false;
+    const role = systemUser.role;
+    if (role === 'ADMIN') return true;
+    if (role === 'EDITOR') {
+      return action !== 'delete';
+    }
+    if (role === 'VIEWER') {
+      return action === 'view' || action === 'share';
+    }
+    return false;
+  };
 
   // Search & Filters
   const [articleSearch, setArticleSearch] = useState('');
@@ -294,7 +312,7 @@ export default function App() {
   const [showVariantForm, setShowVariantForm] = useState(false);
   const [editingVariant, setEditingVariant] = useState<ArticleVariant | null>(null);
   const [newVariant, setNewVariant] = useState<Partial<ArticleVariant>>({});
-  const [newUser, setNewUser] = useState<Partial<User>>({});
+  const [newUser, setNewUser] = useState<Partial<User>>({ role: 'VIEWER' });
 
   // User Management State
   const [users, setUsers] = useState<User[]>([]);
@@ -330,6 +348,7 @@ export default function App() {
   const [editingMovementData, setEditingMovementData] = useState<{quantity: number, observations: string}>({quantity: 0, observations: ''});
 
   const [showOutputForm, setShowOutputForm] = useState(false);
+  const [showUserSelector, setShowUserSelector] = useState(false);
   const [showInputForm, setShowInputForm] = useState(false);
   const [showStockEntryForm, setShowStockEntryForm] = useState(false);
   const [showStockExitForm, setShowStockExitForm] = useState(false);
@@ -383,7 +402,7 @@ export default function App() {
   const articleCodeInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (view === 'users-management') {
+    if (view === 'users-management' || view === 'login') {
       fetchUsers();
     }
   }, [view]);
@@ -517,7 +536,7 @@ export default function App() {
     return total;
   };
 
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+  const showToast = (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
@@ -533,6 +552,16 @@ export default function App() {
       const res = await fetch('/api/users');
       const data = await res.json();
       setUsers(data);
+      
+      // Set the last logged in user as system user for the login screen
+      if (data.length > 0) {
+        const lastUser = [...data].sort((a, b) => {
+          if (!a.last_login) return 1;
+          if (!b.last_login) return -1;
+          return new Date(b.last_login).getTime() - new Date(a.last_login).getTime();
+        })[0];
+        setSystemUser(lastUser || data[0]);
+      }
       
       // Check movements for each user to determine if they can be deleted
       const movementsCheck: Record<number, boolean> = {};
@@ -560,7 +589,12 @@ export default function App() {
       });
 
       if (response.ok) {
-        showToast(editingUser ? 'Utilizador atualizado!' : 'Utilizador criado!');
+        const data = await response.json();
+        if (data.warning) {
+          showToast(data.warning, 'warning');
+        } else {
+          showToast(editingUser ? 'Utilizador atualizado!' : 'Utilizador criado!');
+        }
         setShowUserManagementForm(false);
         setEditingUser(null);
         setNewUser({});
@@ -1254,7 +1288,10 @@ export default function App() {
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pin })
+        body: JSON.stringify({ 
+          pin, 
+          email: systemUser?.email 
+        })
       });
       if (res.ok) {
         const userData = await res.json();
@@ -1273,15 +1310,20 @@ export default function App() {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch('/api/users', {
-        method: 'POST',
+      const url = isEditingUser ? `/api/users/${newUser.id}` : '/api/users';
+      const method = isEditingUser ? 'PUT' : 'POST';
+      
+      const res = await fetch(url, {
+        method: method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newUser)
       });
       if (res.ok) {
         setView('login');
-        setNewUser({});
-        showToast('Utilizador registado com sucesso!');
+        setNewUser({ role: 'VIEWER' });
+        setIsEditingUser(false);
+        setRecoveryUser(null);
+        showToast(isEditingUser ? 'Utilizador atualizado com sucesso!' : 'Utilizador registado com sucesso!');
       }
     } finally {
       setLoading(false);
@@ -2336,69 +2378,52 @@ export default function App() {
     });
   };
 
-  const handleForgotPin = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleForgotPin = async (emailOverride?: string) => {
+    const targetEmail = emailOverride || forgotEmail;
+    if (!targetEmail) return;
+    
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/auth/forgot-pin', {
+      const res = await fetch('/api/auth/get-recovery-question', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail })
+        body: JSON.stringify({ email: targetEmail })
       });
       if (res.ok) {
+        const data = await res.json();
+        setForgotQuestion(data.question);
         setForgotStep(2);
+        setView('forgot-pin');
       } else {
         const data = await res.json();
         setError(data.error);
       }
+    } catch (err) {
+      setError('Erro ao obter pergunta de recuperação');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleVerifyCodeStep = async (e: React.FormEvent) => {
+  const handleVerifyAnswerStep = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/auth/verify-code', {
+      const res = await fetch('/api/auth/verify-recovery-answer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail, code: forgotCode })
+        body: JSON.stringify({ email: forgotEmail, answer: forgotAnswer })
       });
       if (res.ok) {
-        setForgotStep(3);
-      } else {
         const data = await res.json();
-        setError(data.error);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResetPin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newPin.length !== 4) {
-      setError('O PIN deve ter 4 dígitos.');
-      return;
-    }
-    setLoading(true);
-    setError('');
-    try {
-      const res = await fetch('/api/auth/reset-pin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail, code: forgotCode, newPin })
-      });
-      if (res.ok) {
-        showToast('PIN alterado com sucesso!');
-        setView('login');
+        setRecoveryUser(data.user);
+        setNewUser(data.user);
+        setIsEditingUser(true);
+        setView('register-user');
         setForgotStep(1);
-        setForgotEmail('');
-        setForgotCode('');
-        setNewPin('');
+        setForgotAnswer('');
       } else {
         const data = await res.json();
         setError(data.error);
@@ -2407,6 +2432,31 @@ export default function App() {
       setLoading(false);
     }
   };
+
+  const handleContactSupport = () => {
+    const adminEmail = 'rmsp.mobile.apps@gmail.com';
+    const subject = encodeURIComponent('Recuperação de PIN - A2R Inventory');
+    const body = encodeURIComponent(`Olá,\n\nSolicito assistência para recuperar o meu PIN.\n\nUtilizador: ${systemUser?.name || 'Não identificado'}\nEmail: ${forgotEmail || systemUser?.email || ''}\n\nObrigado.`);
+    window.location.href = `mailto:${adminEmail}?subject=${subject}&body=${body}`;
+  };
+
+  const handleMailtoOutput = (output: Output) => {
+    const subject = encodeURIComponent(`Ordem de Entrega #${output.id} - ${output.client_name}`);
+    let bodyText = `ORDEM DE ENTREGA #${output.id}\n\n`;
+    bodyText += `Cliente: ${output.client_name}\n`;
+    bodyText += `Contato: ${output.client_contact || 'N/A'}\n`;
+    bodyText += `Local: ${output.location_name}\n`;
+    bodyText += `Data Entrega: ${formatFullDate(output.delivery_date)}\n`;
+    bodyText += `Data Recolha: ${formatFullDate(output.collection_date)}\n\n`;
+    bodyText += `ARTIGOS:\n`;
+    output.items?.forEach(item => {
+      bodyText += `- ${item.article_description} (${item.article_code}): ${item.quantity_out} unid.\n`;
+    });
+    
+    const body = encodeURIComponent(bodyText);
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
+  };
+
 
 
   const generateStockReport = async (article: Article, pendingDeliveries: number, totalStock: number, articleMovements: any[]) => {
@@ -2504,7 +2554,7 @@ export default function App() {
 
   if (view === 'login') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50 relative">
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50 relative overflow-y-auto custom-scrollbar">
         <div className="absolute top-6 right-6">
           <button 
             onClick={() => {
@@ -2524,6 +2574,31 @@ export default function App() {
           className="w-full max-w-md bg-white rounded-3xl shadow-xl p-8 border border-slate-100"
         >
           <h2 className="text-2xl font-semibold text-center mb-6 text-slate-800">Recolha no Sistema</h2>
+          
+          {systemUser && (
+            <div className="flex flex-col items-center mb-8 p-4 bg-slate-50 rounded-2xl border border-slate-100">
+              <div className="w-20 h-20 rounded-full overflow-hidden mb-3 border-4 border-white shadow-md">
+                {systemUser.photo ? (
+                  <img src={systemUser.photo} alt={systemUser.name} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full bg-a2r-blue-light/20 flex items-center justify-center text-a2r-blue-dark">
+                    <UserIcon size={40} />
+                  </div>
+                )}
+              </div>
+              <div className="text-center">
+                <p className="text-lg font-bold text-slate-800">Olá {systemUser.name}</p>
+                <p className="text-sm text-slate-500">{systemUser.email}</p>
+                <button 
+                  onClick={() => setShowUserSelector(true)}
+                  className="mt-2 text-xs text-a2r-blue-dark font-bold hover:underline"
+                >
+                  Trocar Utilizador
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-center gap-4 mb-8">
             {[0, 1, 2, 3].map((i) => (
               <div 
@@ -2575,26 +2650,82 @@ export default function App() {
 
           <div className="flex flex-col gap-3">
             <button 
-              onClick={() => setView('register-user')}
+              onClick={() => {
+                setView('register-user');
+                setIsEditingUser(false);
+                if (systemUser) {
+                  setNewUser({ email: systemUser.email });
+                }
+              }}
               className="text-sm text-a2r-blue-dark font-medium hover:underline text-center"
             >
               Novo Utilizador? Registar
             </button>
             <button 
-              onClick={() => setView('forgot-pin')}
-              className="text-xs text-slate-400 hover:underline text-center"
+              onClick={() => {
+                if (systemUser) {
+                  setForgotEmail(systemUser.email);
+                  handleForgotPin(systemUser.email);
+                }
+              }}
+              className={`text-xs text-slate-400 hover:underline text-center ${!systemUser ? 'opacity-0 pointer-events-none' : ''}`}
             >
               Esqueceu o PIN?
             </button>
           </div>
         </motion.div>
+
+        {showUserSelector && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+                <h3 className="text-xl font-bold text-slate-800">Selecionar Utilizador</h3>
+                <button onClick={() => setShowUserSelector(false)} className="text-slate-400 hover:text-slate-600">
+                  <X size={24} />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto custom-scrollbar space-y-3">
+                {users.filter(u => u.active).map(user => (
+                  <button
+                    key={user.id}
+                    onClick={() => {
+                      setSystemUser(user);
+                      setShowUserSelector(false);
+                      setPin('');
+                      setError('');
+                    }}
+                    className="w-full flex items-center gap-4 p-4 rounded-2xl border border-slate-100 hover:bg-slate-50 transition-all text-left"
+                  >
+                    <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-white shadow-sm">
+                      {user.photo ? (
+                        <img src={user.photo} alt={user.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full bg-slate-100 flex items-center justify-center text-slate-400">
+                          <UserIcon size={24} />
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <p className="font-bold text-slate-800">{user.name}</p>
+                      <p className="text-xs text-slate-500">{user.email}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+        )}
       </div>
     );
   }
 
   if (view === 'forgot-pin') {
     return (
-      <div className="min-h-screen bg-slate-50 p-6 flex flex-col items-center justify-center">
+      <div className="min-h-screen bg-slate-50 p-6 flex flex-col items-center justify-center overflow-y-auto custom-scrollbar">
         <Logo />
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
@@ -2603,96 +2734,45 @@ export default function App() {
         >
           <h2 className="text-2xl font-semibold mb-6 text-slate-800 text-center">Recuperar PIN</h2>
           
-          {forgotStep === 1 && (
-            <form onSubmit={handleForgotPin} className="space-y-4">
-              <p className="text-sm text-slate-500 text-center mb-4">
-                Introduza o seu email para receber um código de recuperação.
-              </p>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
-                <input 
-                  type="email" 
-                  required
-                  className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none"
-                  value={forgotEmail}
-                  onChange={e => setForgotEmail(e.target.value)}
-                />
+          {forgotStep === 2 && (
+            <form onSubmit={handleVerifyAnswerStep} className="space-y-4">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Pergunta de Segurança</label>
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 text-slate-700 font-bold italic">
+                    "{forgotQuestion}"
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Sua Resposta</label>
+                  <input 
+                    type="text" 
+                    required
+                    autoFocus
+                    placeholder="Escreva a sua resposta..."
+                    className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none font-medium transition-all"
+                    value={forgotAnswer}
+                    onChange={e => setForgotAnswer(e.target.value)}
+                  />
+                </div>
               </div>
+
               {error && <p className="text-red-500 text-xs text-center">{error}</p>}
+              
               <button 
                 type="submit"
                 disabled={loading}
-                className="w-full py-3 rounded-xl a2r-gradient text-white font-medium hover:opacity-90 disabled:opacity-50"
+                className="w-full py-3 rounded-xl bg-emerald-500 text-white font-medium hover:bg-emerald-600 transition-all disabled:opacity-50"
               >
-                {loading ? 'A processar...' : 'Enviar Código'}
+                {loading ? 'A verificar...' : 'Verificar Resposta'}
               </button>
+              
               <button 
                 type="button"
                 onClick={() => setView('login')}
                 className="w-full text-sm text-slate-400 hover:underline"
               >
                 Voltar ao Login
-              </button>
-            </form>
-          )}
-
-          {forgotStep === 2 && (
-            <form onSubmit={handleVerifyCodeStep} className="space-y-4">
-              <p className="text-sm text-slate-500 text-center mb-4">
-                Introduza o código de 6 dígitos enviado para <strong>{forgotEmail}</strong>.
-              </p>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Código de Verificação</label>
-                <input 
-                  type="text" 
-                  required
-                  maxLength={6}
-                  className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none text-center text-2xl tracking-widest"
-                  value={forgotCode}
-                  onChange={e => setForgotCode(e.target.value.replace(/\D/g, ''))}
-                />
-              </div>
-              {error && <p className="text-red-500 text-xs text-center">{error}</p>}
-              <button 
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 rounded-xl a2r-gradient text-white font-medium hover:opacity-90 disabled:opacity-50"
-              >
-                {loading ? 'A verificar...' : 'Verificar Código'}
-              </button>
-              <button 
-                type="button"
-                onClick={() => setForgotStep(1)}
-                className="w-full text-sm text-slate-400 hover:underline"
-              >
-                Alterar Email
-              </button>
-            </form>
-          )}
-
-          {forgotStep === 3 && (
-            <form onSubmit={handleResetPin} className="space-y-4">
-              <p className="text-sm text-slate-500 text-center mb-4">
-                Defina o seu novo PIN de 4 dígitos.
-              </p>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Novo PIN</label>
-                <input 
-                  type="password" 
-                  required
-                  maxLength={4}
-                  className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none text-center text-2xl tracking-widest"
-                  value={newPin}
-                  onChange={e => setNewPin(e.target.value.replace(/\D/g, ''))}
-                />
-              </div>
-              {error && <p className="text-red-500 text-xs text-center">{error}</p>}
-              <button 
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 rounded-xl a2r-gradient text-white font-medium hover:opacity-90 disabled:opacity-50"
-              >
-                {loading ? 'A guardar...' : 'Alterar PIN'}
               </button>
             </form>
           )}
@@ -2703,61 +2783,134 @@ export default function App() {
 
   if (view === 'register-user') {
     return (
-      <div className="min-h-screen bg-slate-50 p-6 flex flex-col items-center">
-        <Logo />
-        <div className="w-full max-w-md bg-white rounded-3xl shadow-xl p-8 border border-slate-100">
-          <h2 className="text-2xl font-semibold mb-6 text-slate-800">Registo de Utilizador</h2>
-          <form onSubmit={handleRegisterUser} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Nome Completo</label>
-              <input 
-                type="text" 
-                required
-                className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none"
-                value={newUser.name || ''}
-                onChange={e => setNewUser({...newUser, name: e.target.value})}
+      <div className="min-h-screen bg-slate-50 p-6 flex flex-col items-center overflow-y-auto custom-scrollbar">
+        <div className="w-full max-w-3xl bg-white rounded-[2.5rem] shadow-2xl p-10 border border-slate-100 mt-8">
+          <h2 className="text-3xl font-bold mb-4 text-slate-800 font-display">
+            {isEditingUser ? 'Editar Utilizador' : 'Novo Utilizador'}
+          </h2>
+          <form onSubmit={handleRegisterUser} className="space-y-3">
+            {/* 1ª linha: Foto */}
+            <div className="flex justify-center mb-2">
+              <PhotoUpload 
+                onPhotoCapture={base64 => setNewUser({...newUser, photo: base64})}
+                currentPhoto={newUser.photo}
+                label=""
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
-              <input 
-                type="email" 
-                required
-                className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none"
-                value={newUser.email || ''}
-                onChange={e => setNewUser({...newUser, email: e.target.value})}
-              />
+
+            {/* 2ª linha: Nome Utilizador, Email */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Nome Utilizador</label>
+                <input 
+                  type="text" 
+                  required
+                  className="w-full px-5 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none font-medium text-lg"
+                  value={newUser.name || ''}
+                  onChange={e => setNewUser({...newUser, name: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Email</label>
+                <input 
+                  type="email" 
+                  required
+                  className="w-full px-5 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none font-medium text-lg"
+                  value={newUser.email || ''}
+                  onChange={e => setNewUser({...newUser, email: e.target.value})}
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">PIN (4 dígitos)</label>
-              <input 
-                type="password" 
-                maxLength={4}
-                required
-                className="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none"
-                value={newUser.pin || ''}
-                onChange={e => setNewUser({...newUser, pin: e.target.value.replace(/\D/g, '')})}
-              />
+
+            {/* 3ª Linha: PIN, Tipo */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">PIN (4 DÍGITOS)</label>
+                <input 
+                  type="password" 
+                  maxLength={4}
+                  required
+                  className="w-full px-5 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none font-medium text-lg"
+                  value={newUser.pin || ''}
+                  onChange={e => setNewUser({...newUser, pin: e.target.value.replace(/\D/g, '')})}
+                />
+              </div>
+
+              {!recoveryUser && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Tipo de Utilizador</label>
+                  <select 
+                    className="w-full px-5 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-a2r-blue-light outline-none font-medium text-lg appearance-none bg-white"
+                    value={newUser.role || 'VIEWER'}
+                    onChange={e => setNewUser({...newUser, role: e.target.value as UserRole})}
+                  >
+                    <option value="ADMIN">Administrador</option>
+                    <option value="EDITOR">Editor / Gestor</option>
+                    <option value="VIEWER">Visualizador / Leitor</option>
+                  </select>
+                </div>
+              )}
             </div>
-            <PhotoUpload 
-              onPhotoCapture={base64 => setNewUser({...newUser, photo: base64})}
-              currentPhoto={newUser.photo}
-              label="Foto de Perfil"
-            />
-            <div className="flex gap-4 pt-4">
+
+            {/* 4ª Linha: LABEL "RECUPERAÇÃO DE CONTA" */}
+            <div className="pt-2 border-t border-slate-100">
+              <p className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-2">RECUPERAÇÃO DE CONTA</p>
+            </div>
+
+            {/* 5ª Linha: Pergunta Pessoal, Resposta */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Pergunta Pessoal</label>
+                <input 
+                  type="text"
+                  placeholder="Ex: Nome do seu primeiro animal?"
+                  className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium text-lg"
+                  value={newUser.security_question || ''}
+                  onChange={e => setNewUser({...newUser, security_question: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Resposta à Pergunta</label>
+                <input 
+                  type="text"
+                  placeholder="A sua resposta secreta"
+                  className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium text-lg"
+                  value={newUser.security_answer || ''}
+                  onChange={e => setNewUser({...newUser, security_answer: e.target.value})}
+                />
+              </div>
+            </div>
+
+            {/* 6ª Linha: Checkbox */}
+            <div className="flex items-center gap-4 pt-1">
+              <input 
+                type="checkbox"
+                id="reg-user-active"
+                className="w-6 h-6 rounded border-slate-300 text-a2r-blue-dark focus:ring-a2r-blue-light"
+                checked={newUser.active ?? true}
+                onChange={e => setNewUser({...newUser, active: e.target.checked})}
+              />
+              <label htmlFor="reg-user-active" className="text-base font-bold text-slate-700 cursor-pointer">Utilizador Ativo</label>
+            </div>
+
+            <div className="flex gap-6 pt-6">
               <button 
                 type="button"
-                onClick={() => setView('login')}
-                className="flex-1 py-3 rounded-xl border border-slate-200 text-slate-600 font-medium hover:bg-slate-50"
+                onClick={() => {
+                  setView('login');
+                  setIsEditingUser(false);
+                  setNewUser({});
+                }}
+                className="flex-1 py-4 rounded-2xl border border-slate-200 text-slate-600 font-bold text-lg hover:bg-slate-50 transition-all"
               >
-                Cancelar
+                Voltar
               </button>
               <button 
                 type="submit"
                 disabled={loading}
-                className="flex-1 py-3 rounded-xl a2r-gradient text-white font-medium hover:opacity-90 disabled:opacity-50"
+                className="flex-1 py-4 rounded-2xl a2r-gradient text-white font-bold text-lg shadow-lg shadow-blue-200 hover:opacity-90 transition-all disabled:opacity-50"
               >
-                {loading ? 'A registar...' : 'Registar'}
+                {loading ? 'A guardar...' : (isEditingUser ? 'Atualizar' : 'Registar')}
               </button>
             </div>
           </form>
@@ -2814,18 +2967,46 @@ export default function App() {
                   <h2 className="text-3xl font-bold text-slate-900 tracking-tight font-display">
                     Olá, <span className="a2r-text-gradient">{user?.name.split(' ')[0]}</span>!
                   </h2>
+                  <div className="mt-1">
+                    {user?.role === 'ADMIN' && (
+                      <div>
+                        <p className="text-slate-800 font-bold text-sm">Administrador</p>
+                        <p className="text-slate-500 text-xs">Acesso total ao sistema</p>
+                      </div>
+                    )}
+                    {user?.role === 'EDITOR' && (
+                      <div>
+                        <p className="text-slate-800 font-bold text-sm">Editor</p>
+                        <p className="text-slate-500 text-xs">Pode criar e editar mas não eliminar</p>
+                      </div>
+                    )}
+                    {user?.role === 'VIEWER' && (
+                      <div>
+                        <p className="text-slate-800 font-bold text-sm">Leitor</p>
+                        <p className="text-slate-500 text-xs">Apenas consulta e partilha informação</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-2">
                   <p 
-                    className="text-slate-500 font-medium cursor-pointer hover:text-a2r-blue-dark transition-colors"
-                    onClick={() => setView('users-management')}
+                    className="text-slate-400 font-bold text-[10px] uppercase tracking-widest cursor-pointer hover:text-a2r-blue-dark transition-colors"
+                    onClick={() => {
+                      if (user?.role === 'ADMIN') {
+                        setView('users-management');
+                      } else {
+                        showToast('Apenas administradores podem aceder à gestão de utilizadores', 'error');
+                      }
+                    }}
                   >
                     Painel de Controlo A2R Logística
                   </p>
-                </div>
-                <div className="bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-3">
-                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-                  <span className="text-xs font-bold text-slate-600 uppercase tracking-widest font-display">
-                    {new Date().toLocaleDateString('pt-PT', { weekday: 'long', day: 'numeric', month: 'long' })}
-                  </span>
+                  <div className="bg-white px-4 py-2 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-3">
+                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                    <span className="text-xs font-bold text-slate-600 uppercase tracking-widest font-display">
+                      {new Date().toLocaleDateString('pt-PT', { weekday: 'long', day: 'numeric', month: 'long' })}
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -2952,23 +3133,27 @@ export default function App() {
                     <FileText size={18} />
                     Relatório Inventário
                   </button>
-                  <button 
-                    onClick={() => {
-                      setCategoriesReturnView('articles');
-                      setView('categories');
-                    }}
-                    className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition-all shadow-sm"
-                  >
-                    <Layers size={18} />
-                    Famílias
-                  </button>
-                  <button 
-                    onClick={openAddArticle}
-                    className="flex items-center gap-2 px-4 py-2 a2r-gradient text-white rounded-xl font-medium shadow-lg shadow-blue-200"
-                  >
-                    <Plus size={18} />
-                    Novo Artigo
-                  </button>
+                  {can('edit') && (
+                    <button 
+                      onClick={() => {
+                        setCategoriesReturnView('articles');
+                        setView('categories');
+                      }}
+                      className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-medium hover:bg-slate-50 transition-all shadow-sm"
+                    >
+                      <Layers size={18} />
+                      Famílias
+                    </button>
+                  )}
+                  {can('create') && (
+                    <button 
+                      onClick={openAddArticle}
+                      className="flex items-center gap-2 px-4 py-2 a2r-gradient text-white rounded-xl font-medium shadow-lg shadow-blue-200"
+                    >
+                      <Plus size={18} />
+                      Novo Artigo
+                    </button>
+                  )}
                   <button 
                     onClick={() => setView('menu')}
                     className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
@@ -3005,8 +3190,10 @@ export default function App() {
                   <div 
                     key={article.id} 
                     onClick={() => {
-                      setEditingArticle(article);
-                      setView('edit-article');
+                      if (can('edit')) {
+                        setEditingArticle(article);
+                        setView('edit-article');
+                      }
                     }}
                     className="bg-white rounded-2xl p-1.5 border border-slate-100 shadow-sm hover:shadow-xl hover:border-a2r-blue-light/30 transition-all group cursor-pointer flex flex-col sm:flex-row sm:items-center gap-2 relative overflow-hidden"
                   >
@@ -3069,32 +3256,36 @@ export default function App() {
                       </div>
 
                       <div className="flex flex-wrap items-center justify-end gap-1 mt-1 pt-1 border-t border-slate-50">
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedStockArticle(article);
-                            setStockForm(prev => ({ ...prev, type: 'IN' }));
-                            setShowStockEntryForm(true);
-                          }}
-                          className="flex items-center gap-1 px-2 py-1 text-emerald-600 bg-emerald-50 hover:bg-emerald-500 hover:text-white rounded-lg transition-all border border-emerald-100 shadow-sm"
-                          title="Entrada de Stock"
-                        >
-                          <PlusCircle size={14} />
-                          <span className="text-[9px] font-bold uppercase tracking-wider">Entradas</span>
-                        </button>
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedStockArticle(article);
-                            setStockForm(prev => ({ ...prev, type: 'OUT' }));
-                            setShowStockExitForm(true);
-                          }}
-                          className="flex items-center gap-1 px-2 py-1 text-red-600 bg-red-50 hover:bg-red-500 hover:text-white rounded-lg transition-all border border-red-100 shadow-sm"
-                          title="Saída de Stock"
-                        >
-                          <MinusCircle size={14} />
-                          <span className="text-[9px] font-bold uppercase tracking-wider">Saídas</span>
-                        </button>
+                        {can('create') && (
+                          <>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedStockArticle(article);
+                                setStockForm(prev => ({ ...prev, type: 'IN' }));
+                                setShowStockEntryForm(true);
+                              }}
+                              className="flex items-center gap-1 px-2 py-1 text-emerald-600 bg-emerald-50 hover:bg-emerald-500 hover:text-white rounded-lg transition-all border border-emerald-100 shadow-sm"
+                              title="Entrada de Stock"
+                            >
+                              <PlusCircle size={14} />
+                              <span className="text-[9px] font-bold uppercase tracking-wider">Entradas</span>
+                            </button>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedStockArticle(article);
+                                setStockForm(prev => ({ ...prev, type: 'OUT' }));
+                                setShowStockExitForm(true);
+                              }}
+                              className="flex items-center gap-1 px-2 py-1 text-red-600 bg-red-50 hover:bg-red-500 hover:text-white rounded-lg transition-all border border-red-100 shadow-sm"
+                              title="Saída de Stock"
+                            >
+                              <MinusCircle size={14} />
+                              <span className="text-[9px] font-bold uppercase tracking-wider">Saídas</span>
+                            </button>
+                          </>
+                        )}
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();
@@ -3108,19 +3299,21 @@ export default function App() {
                           <History size={14} />
                           <span className="text-[9px] font-bold uppercase tracking-wider">Movimentos</span>
                         </button>
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingArticle(article);
-                            setArticleEditTab('variants');
-                            setView('edit-article');
-                          }}
-                          className="flex items-center gap-1 px-2 py-1 text-amber-600 bg-amber-50 hover:bg-amber-500 hover:text-white rounded-lg transition-all border border-amber-100 shadow-sm"
-                          title="Modelos do Artigo"
-                        >
-                          <Box size={14} />
-                          <span className="text-[9px] font-bold uppercase tracking-wider">Modelos</span>
-                        </button>
+                        {can('edit') && (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingArticle(article);
+                              setArticleEditTab('variants');
+                              setView('edit-article');
+                            }}
+                            className="flex items-center gap-1 px-2 py-1 text-amber-600 bg-amber-50 hover:bg-amber-500 hover:text-white rounded-lg transition-all border border-amber-100 shadow-sm"
+                            title="Modelos do Artigo"
+                          >
+                            <Box size={14} />
+                            <span className="text-[9px] font-bold uppercase tracking-wider">Modelos</span>
+                          </button>
+                        )}
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();
@@ -3131,16 +3324,18 @@ export default function App() {
                         >
                           <Share2 size={14} />
                         </button>
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            confirmDeleteArticle(article.id);
-                          }}
-                          className="p-1.5 bg-slate-50 text-slate-400 hover:bg-red-600 hover:text-white transition-all border border-slate-100 rounded-lg shadow-sm"
-                          title="Eliminar Artigo"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        {can('delete') && (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              confirmDeleteArticle(article.id);
+                            }}
+                            className="p-1.5 bg-slate-50 text-slate-400 hover:bg-red-600 hover:text-white transition-all border border-slate-100 rounded-lg shadow-sm"
+                            title="Eliminar Artigo"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -3934,6 +4129,13 @@ export default function App() {
                                       <Printer size={18} />
                                     </button>
                                     <button 
+                                      onClick={() => handleMailtoOutput(output)}
+                                      className="p-2 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-xl transition-all"
+                                      title="Enviar por Email"
+                                    >
+                                      <Mail size={18} />
+                                    </button>
+                                    <button 
                                       onClick={() => {
                                         setEditingOutputId(output.id);
                                         setOutputForm({
@@ -4131,6 +4333,13 @@ export default function App() {
                                       title="Imprimir PDF"
                                     >
                                       <Printer size={18} />
+                                    </button>
+                                    <button 
+                                      onClick={() => handleMailtoOutput(output)}
+                                      className="p-2 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-xl transition-all"
+                                      title="Enviar por Email"
+                                    >
+                                      <Mail size={18} />
                                     </button>
                                     <button 
                                       onClick={() => {
@@ -4356,6 +4565,13 @@ export default function App() {
                                           title="Imprimir PDF Entrega"
                                         >
                                           <Printer size={18} />
+                                        </button>
+                                        <button 
+                                          onClick={() => handleMailtoOutput(output)}
+                                          className="p-2 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-xl transition-all"
+                                          title="Enviar por Email"
+                                        >
+                                          <Mail size={18} />
                                         </button>
                                         <button 
                                           onClick={() => {
@@ -4986,25 +5202,27 @@ export default function App() {
                   {showInputForm ? (editingMovementId ? 'Editar Recolha' : 'Nova Recolha') : 'Recolhas'}
                 </h2>
                 <div className="flex gap-2">
-                  <button 
-                    onClick={() => {
-                      setShowInputForm(!showInputForm);
-                      if (!showInputForm) {
-                        setSelectedOutputId('');
-                        setReturnItems({});
-                        setEditingMovementId(null);
-                        setReturnEmployee('');
-                      }
-                    }}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium transition-all ${
-                      showInputForm 
-                        ? 'bg-slate-100 text-slate-600' 
-                        : 'bg-emerald-500 text-white shadow-lg shadow-emerald-100'
-                    }`}
-                  >
-                    {showInputForm ? <X size={18} /> : <Plus size={18} />}
-                    {showInputForm ? 'Cancelar' : 'Nova Recolha'}
-                  </button>
+                  {can('create') && (
+                    <button 
+                      onClick={() => {
+                        setShowInputForm(!showInputForm);
+                        if (!showInputForm) {
+                          setSelectedOutputId('');
+                          setReturnItems({});
+                          setEditingMovementId(null);
+                          setReturnEmployee('');
+                        }
+                      }}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium transition-all ${
+                        showInputForm 
+                          ? 'bg-slate-100 text-slate-600' 
+                          : 'bg-emerald-500 text-white shadow-lg shadow-emerald-100'
+                      }`}
+                    >
+                      {showInputForm ? <X size={18} /> : <Plus size={18} />}
+                      {showInputForm ? 'Cancelar' : 'Nova Recolha'}
+                    </button>
+                  )}
                   {!showInputForm && (
                     <button 
                       onClick={() => setView('menu')}
@@ -5406,21 +5624,23 @@ export default function App() {
                                       </div>
                                     </div>
                                     <div className="flex flex-col items-end gap-2">
-                                      <button 
-                                        onClick={() => {
-                                          setSelectedOutputId(output.id.toString());
-                                          setReturnEmployee(output.collection_employee || '');
-                                          const initialReturns: Record<number, number> = {};
-                                          output.items?.forEach((item: any) => {
-                                            initialReturns[item.article_id] = item.quantity_out - item.quantity_in;
-                                          });
-                                          setReturnItems(initialReturns);
-                                          setShowInputForm(true);
-                                        }}
-                                        className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-sm font-bold shadow-md hover:bg-emerald-600 transition-all"
-                                      >
-                                        Nova Recolha
-                                      </button>
+                                      {can('create') && (
+                                        <button 
+                                          onClick={() => {
+                                            setSelectedOutputId(output.id.toString());
+                                            setReturnEmployee(output.collection_employee || '');
+                                            const initialReturns: Record<number, number> = {};
+                                            output.items?.forEach((item: any) => {
+                                              initialReturns[item.article_id] = item.quantity_out - item.quantity_in;
+                                            });
+                                            setReturnItems(initialReturns);
+                                            setShowInputForm(true);
+                                          }}
+                                          className="px-4 py-2 bg-emerald-500 text-white rounded-xl text-sm font-bold shadow-md hover:bg-emerald-600 transition-all"
+                                        >
+                                          Nova Recolha
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
 
@@ -5637,31 +5857,35 @@ export default function App() {
                                                   <p className="text-[8px] text-slate-400 uppercase font-bold">Recolhido</p>
                                                 </div>
                                                 <div className="flex gap-1">
-                                                  <button 
-                                                    onClick={() => {
-                                                      const outputIdMatch = m.observations?.match(/#(\d+)/);
-                                                      const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
-                                                      const output = outputId ? outputs.find(o => o.id === outputId) : null;
-                                                      setReturnEmployee(output?.collection_employee || '');
-                                                      setEditingMovementId(m.id);
-                                                      setEditingMovementData({
-                                                        quantity: m.quantity,
-                                                        observations: m.observations || ''
-                                                      });
-                                                      setShowInputForm(true);
-                                                    }}
-                                                    className="p-2 text-slate-400 hover:text-indigo-500 transition-colors bg-white rounded-xl border border-slate-100 shadow-sm"
-                                                    title="Editar"
-                                                  >
-                                                    <Edit size={14} />
-                                                  </button>
-                                                  <button 
-                                                    onClick={() => handleDeleteMovement(m.id)}
-                                                    className="p-2 text-slate-400 hover:text-red-500 transition-colors bg-white rounded-xl border border-slate-100 shadow-sm"
-                                                    title="Eliminar"
-                                                  >
-                                                    <Trash2 size={14} />
-                                                  </button>
+                                                  {can('edit') && (
+                                                    <button 
+                                                      onClick={() => {
+                                                        const outputIdMatch = m.observations?.match(/#(\d+)/);
+                                                        const outputId = outputIdMatch ? parseInt(outputIdMatch[1]) : null;
+                                                        const output = outputId ? outputs.find(o => o.id === outputId) : null;
+                                                        setReturnEmployee(output?.collection_employee || '');
+                                                        setEditingMovementId(m.id);
+                                                        setEditingMovementData({
+                                                          quantity: m.quantity,
+                                                          observations: m.observations || ''
+                                                        });
+                                                        setShowInputForm(true);
+                                                      }}
+                                                      className="p-2 text-slate-400 hover:text-indigo-500 transition-colors bg-white rounded-xl border border-slate-100 shadow-sm"
+                                                      title="Editar"
+                                                    >
+                                                      <Edit size={14} />
+                                                    </button>
+                                                  )}
+                                                  {can('delete') && (
+                                                    <button 
+                                                      onClick={() => handleDeleteMovement(m.id)}
+                                                      className="p-2 text-slate-400 hover:text-red-500 transition-colors bg-white rounded-xl border border-slate-100 shadow-sm"
+                                                      title="Eliminar"
+                                                    >
+                                                      <Trash2 size={14} />
+                                                    </button>
+                                                  )}
                                                 </div>
                                               </div>
                                             </div>
@@ -5695,23 +5919,25 @@ export default function App() {
                   {showOutputForm ? (editingOutputId ? 'Editar Entrega' : 'Nova Entrega') : 'Entregas'}
                 </h2>
                 <div className="flex gap-2">
-                  <button 
-                    onClick={() => {
-                      setShowOutputForm(!showOutputForm);
-                      if (!showOutputForm) {
-                        setEditingOutputId(null);
-                        setOutputForm({ type: 'ALUGUER', with_assembly: false, items: [] });
-                      }
-                    }}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium transition-all ${
-                      showOutputForm 
-                        ? 'bg-slate-100 text-slate-600' 
-                        : 'a2r-gradient text-white shadow-lg shadow-blue-100'
-                    }`}
-                  >
-                    {showOutputForm ? <X size={18} /> : <Plus size={18} />}
-                    {showOutputForm ? 'Cancelar' : 'Nova Entrega'}
-                  </button>
+                  {can('create') && (
+                    <button 
+                      onClick={() => {
+                        setShowOutputForm(!showOutputForm);
+                        if (!showOutputForm) {
+                          setEditingOutputId(null);
+                          setOutputForm({ type: 'ALUGUER', with_assembly: false, items: [] });
+                        }
+                      }}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium transition-all ${
+                        showOutputForm 
+                          ? 'bg-slate-100 text-slate-600' 
+                          : 'a2r-gradient text-white shadow-lg shadow-blue-100'
+                      }`}
+                    >
+                      {showOutputForm ? <X size={18} /> : <Plus size={18} />}
+                      {showOutputForm ? 'Cancelar' : 'Nova Entrega'}
+                    </button>
+                  )}
                   {!showOutputForm && (
                     <button 
                       onClick={() => setView('menu')}
@@ -6269,37 +6495,48 @@ export default function App() {
                                     <Printer size={20} />
                                   </button>
                                   <button 
-                                    onClick={() => {
-                                      setEditingOutputId(output.id);
-                                      setOutputForm({
-                                        type: output.type,
-                                        client_name: output.client_name,
-                                        client_contact: output.client_contact,
-                                        delivery_date: formatDateForInput(output.delivery_date),
-                                        assembly_date: formatDateForInput(output.assembly_date),
-                                        collection_date: formatDateForInput(output.collection_date),
-                                        with_assembly: output.with_assembly,
-                                        location_name: output.location_name,
-                                        space_at_location: output.space_at_location,
-                                        observations: output.observations,
-                                        delivery_employee: output.delivery_employee,
-                                        collection_employee: output.collection_employee,
-                                        items: output.items
-                                      });
-                                      setShowOutputForm(true);
-                                    }}
-                                    className="p-2 text-slate-300 hover:text-a2r-blue-dark hover:bg-blue-50 rounded-xl transition-all"
-                                    title="Editar"
+                                    onClick={() => handleMailtoOutput(output)}
+                                    className="p-2 text-slate-300 hover:text-indigo-500 hover:bg-indigo-50 rounded-xl transition-all"
+                                    title="Enviar por Email"
                                   >
-                                    <Edit size={20} />
+                                    <Mail size={20} />
                                   </button>
-                                  <button 
-                                    onClick={() => handleDeleteOutput(output.id)}
-                                    className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
-                                    title="Eliminar"
-                                  >
-                                    <Trash2 size={20} />
-                                  </button>
+                                  {can('edit') && (
+                                    <button 
+                                      onClick={() => {
+                                        setEditingOutputId(output.id);
+                                        setOutputForm({
+                                          type: output.type,
+                                          client_name: output.client_name,
+                                          client_contact: output.client_contact,
+                                          delivery_date: formatDateForInput(output.delivery_date),
+                                          assembly_date: formatDateForInput(output.assembly_date),
+                                          collection_date: formatDateForInput(output.collection_date),
+                                          with_assembly: output.with_assembly,
+                                          location_name: output.location_name,
+                                          space_at_location: output.space_at_location,
+                                          observations: output.observations,
+                                          delivery_employee: output.delivery_employee,
+                                          collection_employee: output.collection_employee,
+                                          items: output.items
+                                        });
+                                        setShowOutputForm(true);
+                                      }}
+                                      className="p-2 text-slate-300 hover:text-a2r-blue-dark hover:bg-blue-50 rounded-xl transition-all"
+                                      title="Editar"
+                                    >
+                                      <Edit size={20} />
+                                    </button>
+                                  )}
+                                  {can('delete') && (
+                                    <button 
+                                      onClick={() => handleDeleteOutput(output.id)}
+                                      className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all"
+                                      title="Eliminar"
+                                    >
+                                      <Trash2 size={20} />
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                               
@@ -6669,38 +6906,42 @@ export default function App() {
                           {movement.type === 'IN' ? '+' : '-'}{movement.quantity}
                         </p>
                         <div className="flex gap-1 justify-end">
-                          <button 
-                            onClick={() => {
-                              const article = articles.find(a => a.id === movement.article_id);
-                              if (article) {
-                                setSelectedStockArticle(article);
-                                setEditingStockMovement(movement);
-                                setStockForm({
-                                  type: movement.type,
-                                  document_number: movement.document_number || '',
-                                  date: movement.date.split('T')[0],
-                                  quantity: movement.quantity,
-                                  observations: movement.observations || ''
-                                });
-                                if (movement.type === 'IN') {
-                                  setShowStockEntryForm(true);
-                                } else {
-                                  setShowStockExitForm(true);
+                          {can('edit') && (
+                            <button 
+                              onClick={() => {
+                                const article = articles.find(a => a.id === movement.article_id);
+                                if (article) {
+                                  setSelectedStockArticle(article);
+                                  setEditingStockMovement(movement);
+                                  setStockForm({
+                                    type: movement.type,
+                                    document_number: movement.document_number || '',
+                                    date: movement.date.split('T')[0],
+                                    quantity: movement.quantity,
+                                    observations: movement.observations || ''
+                                  });
+                                  if (movement.type === 'IN') {
+                                    setShowStockEntryForm(true);
+                                  } else {
+                                    setShowStockExitForm(true);
+                                  }
                                 }
-                              }
-                            }}
-                            className="p-1.5 text-slate-300 hover:text-blue-500 transition-all"
-                            title="Editar Movimento"
-                          >
-                            <Edit2 size={16} />
-                          </button>
-                          <button 
-                            onClick={() => handleDeleteStockMovement(movement.id)}
-                            className="p-1.5 text-slate-300 hover:text-red-500 transition-all"
-                            title="Eliminar Movimento"
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                              }}
+                              className="p-1.5 text-slate-300 hover:text-blue-500 transition-all"
+                              title="Editar Movimento"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                          )}
+                          {can('delete') && (
+                            <button 
+                              onClick={() => handleDeleteStockMovement(movement.id)}
+                              className="p-1.5 text-slate-300 hover:text-red-500 transition-all"
+                              title="Eliminar Movimento"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -7124,7 +7365,12 @@ export default function App() {
                               {u.active ? 'Ativo' : 'Desativo'}
                             </span>
                           </div>
-                          <p className="text-sm text-slate-500">{u.email}</p>
+                          <a 
+                            href={`mailto:${u.email}`}
+                            className="text-sm text-slate-500 hover:text-a2r-blue-dark hover:underline"
+                          >
+                            {u.email}
+                          </a>
                         </div>
                       </div>
                       
@@ -7173,100 +7419,162 @@ export default function App() {
                   <motion.div 
                     initial={{ scale: 0.9, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
-                    className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md overflow-hidden"
+                    className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden"
                   >
-                    <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
-                      <h3 className="text-xl font-bold text-slate-800 font-display">
+                    <div className="px-10 pt-10 pb-4 bg-white shrink-0 relative flex justify-between items-center">
+                      <h2 className="text-3xl font-bold text-slate-800 font-display">
                         {editingUser ? 'Editar Utilizador' : 'Novo Utilizador'}
-                      </h3>
-                      <button onClick={() => setShowUserManagementForm(false)} className="text-slate-400 hover:text-slate-600">
-                        <X size={24} />
+                      </h2>
+                      <button 
+                        onClick={() => setShowUserManagementForm(false)} 
+                        className="text-slate-400 hover:text-slate-600 transition-colors"
+                      >
+                        <X size={28} />
                       </button>
                     </div>
                     
-                    <form onSubmit={handleUserSubmit} className="p-8 space-y-4">
-                      <div className="flex justify-center mb-6">
+                    <form onSubmit={handleUserSubmit} className="px-10 pb-10 space-y-3 overflow-y-auto custom-scrollbar">
+                      {/* 1ª linha: Foto + Botoes */}
+                      <div className="flex justify-center mb-2">
                         <PhotoUpload 
                           currentPhoto={editingUser ? editingUser.photo : (newUser.photo || null)}
                           onPhotoCapture={(photo) => {
                             if (editingUser) setEditingUser({...editingUser, photo});
                             else setNewUser({...newUser, photo});
                           }}
-                          label="Foto do Utilizador"
+                          label=""
                         />
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Nome Completo</label>
-                        <input 
-                          type="text"
-                          required
-                          className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium"
-                          value={editingUser ? editingUser.name : (newUser.name || '')}
-                          onChange={e => {
-                            if (editingUser) setEditingUser({...editingUser, name: e.target.value});
-                            else setNewUser({...newUser, name: e.target.value});
-                          }}
-                        />
+                      {/* 2ª linha: Nome Utilizador, Email */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Nome Utilizador</label>
+                          <input 
+                            type="text"
+                            required
+                            className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium text-lg"
+                            value={editingUser ? editingUser.name : (newUser.name || '')}
+                            onChange={e => {
+                              if (editingUser) setEditingUser({...editingUser, name: e.target.value});
+                              else setNewUser({...newUser, name: e.target.value});
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Email</label>
+                          <input 
+                            type="email"
+                            required
+                            className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium text-lg"
+                            value={editingUser ? editingUser.email : (newUser.email || '')}
+                            onChange={e => {
+                              if (editingUser) setEditingUser({...editingUser, email: e.target.value});
+                              else setNewUser({...newUser, email: e.target.value});
+                            }}
+                          />
+                        </div>
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Email</label>
-                        <input 
-                          type="email"
-                          required
-                          className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium"
-                          value={editingUser ? editingUser.email : (newUser.email || '')}
-                          onChange={e => {
-                            if (editingUser) setEditingUser({...editingUser, email: e.target.value});
-                            else setNewUser({...newUser, email: e.target.value});
-                          }}
-                        />
+                      {/* 3ª Linha: PIN, Tipo */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">PIN (4 DÍGITOS)</label>
+                          <input 
+                            type="password"
+                            maxLength={4}
+                            required={!editingUser}
+                            placeholder={editingUser ? "Deixe em branco para manter" : "****"}
+                            className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium text-lg"
+                            value={editingUser ? (editingUser.pin === '****' ? '' : editingUser.pin) : (newUser.pin || '')}
+                            onChange={e => {
+                              const val = e.target.value.replace(/\D/g, '').slice(0, 4);
+                              if (editingUser) setEditingUser({...editingUser, pin: val});
+                              else setNewUser({...newUser, pin: val});
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Tipo de Utilizador</label>
+                          <select 
+                            className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium text-lg appearance-none bg-white"
+                            value={editingUser ? editingUser.role : (newUser.role || 'VIEWER')}
+                            onChange={e => {
+                              const val = e.target.value as UserRole;
+                              if (editingUser) setEditingUser({...editingUser, role: val});
+                              else setNewUser({...newUser, role: val});
+                            }}
+                          >
+                            <option value="ADMIN">Administrador</option>
+                            <option value="EDITOR">Editor / Gestor</option>
+                            <option value="VIEWER">Visualizador / Leitor</option>
+                          </select>
+                        </div>
                       </div>
 
-                      <div>
-                        <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">PIN (4 dígitos)</label>
-                        <input 
-                          type="password"
-                          maxLength={4}
-                          required={!editingUser}
-                          placeholder={editingUser ? "Deixe em branco para manter" : "****"}
-                          className="w-full px-4 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium"
-                          value={editingUser ? (editingUser.pin === '****' ? '' : editingUser.pin) : (newUser.pin || '')}
-                          onChange={e => {
-                            const val = e.target.value.replace(/\D/g, '').slice(0, 4);
-                            if (editingUser) setEditingUser({...editingUser, pin: val});
-                            else setNewUser({...newUser, pin: val});
-                          }}
-                        />
+                      {/* 4ª Linha: LABEL "RECUPERAÇÃO DE CONTA" */}
+                      <div className="pt-2 border-t border-slate-100">
+                        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-2">RECUPERAÇÃO DE CONTA</p>
                       </div>
 
-                      <div className="flex items-center gap-3 pt-2">
+                      {/* 5ª Linha: Pergunta Pessoal, Resposta */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 mb-1">Pergunta Pessoal</label>
+                          <input 
+                            type="text"
+                            placeholder="Ex: Nome do seu primeiro animal?"
+                            className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium text-lg"
+                            value={editingUser ? (editingUser.security_question || '') : (newUser.security_question || '')}
+                            onChange={e => {
+                              if (editingUser) setEditingUser({...editingUser, security_question: e.target.value});
+                              else setNewUser({...newUser, security_question: e.target.value});
+                            }}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 mb-1">Resposta à Pergunta</label>
+                          <input 
+                            type="text"
+                            placeholder="A sua resposta secreta"
+                            className="w-full px-5 py-3 rounded-2xl border border-slate-200 outline-none focus:ring-2 focus:ring-a2r-blue-light font-medium text-lg"
+                            value={editingUser ? (editingUser.security_answer || '') : (newUser.security_answer || '')}
+                            onChange={e => {
+                              if (editingUser) setEditingUser({...editingUser, security_answer: e.target.value});
+                              else setNewUser({...newUser, security_answer: e.target.value});
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* 6ª Linha: Checkbox */}
+                      <div className="flex items-center gap-4 pt-1">
                         <input 
                           type="checkbox"
                           id="user-active"
-                          className="w-5 h-5 rounded border-slate-300 text-a2r-blue-dark focus:ring-a2r-blue-light"
+                          className="w-6 h-6 rounded border-slate-300 text-a2r-blue-dark focus:ring-a2r-blue-light"
                           checked={editingUser ? editingUser.active : (newUser.active ?? true)}
                           onChange={e => {
                             if (editingUser) setEditingUser({...editingUser, active: e.target.checked});
                             else setNewUser({...newUser, active: e.target.checked});
                           }}
                         />
-                        <label htmlFor="user-active" className="text-sm font-bold text-slate-700 cursor-pointer">Utilizador Ativo</label>
+                        <label htmlFor="user-active" className="text-base font-bold text-slate-700 cursor-pointer">Utilizador Ativo</label>
                       </div>
 
-                      <div className="flex gap-4 pt-6">
+                      {/* 7ª Linha: Botoes */}
+                      <div className="flex gap-6 pt-2">
                         <button 
                           type="button"
                           onClick={() => setShowUserManagementForm(false)}
-                          className="flex-1 px-6 py-3 rounded-2xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-all"
+                          className="flex-1 px-8 py-4 rounded-2xl border border-slate-200 text-slate-600 font-bold text-lg hover:bg-slate-50 transition-all"
                         >
                           Cancelar
                         </button>
                         <button 
                           type="submit"
                           disabled={loading}
-                          className="flex-1 px-6 py-3 rounded-2xl a2r-gradient text-white font-bold shadow-lg shadow-blue-200 hover:opacity-90 transition-all disabled:opacity-50"
+                          className="flex-1 px-8 py-4 rounded-2xl a2r-gradient text-white font-bold text-lg shadow-lg shadow-blue-200 hover:opacity-90 transition-all disabled:opacity-50"
                         >
                           {loading ? 'A processar...' : 'Guardar'}
                         </button>
@@ -7497,9 +7805,9 @@ export default function App() {
                   <motion.div 
                     initial={{ scale: 0.9, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
-                    className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md overflow-hidden"
+                    className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden"
                   >
-                    <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+                    <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/50 shrink-0">
                       <h3 className="text-xl font-bold text-slate-800 font-display">
                         {editingCategory ? 'Editar' : 'Nova'} { (editingCategory?.nivel === 2 || newCategory.nivel === 2) ? 'Subfamília' : 'Família' }
                       </h3>
@@ -7508,7 +7816,7 @@ export default function App() {
                       </button>
                     </div>
                     
-                    <form onSubmit={handleCategorySubmit} className="p-8 space-y-6">
+                    <form onSubmit={handleCategorySubmit} className="p-8 space-y-6 overflow-y-auto custom-scrollbar">
                       {newCategory.nivel === 2 && !editingCategory && (
                         <div>
                           <label className="block text-sm font-bold text-slate-700 mb-2 uppercase tracking-widest">Família Pai</label>
@@ -7902,6 +8210,8 @@ export default function App() {
             className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-[200] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border ${
               toast.type === 'success' 
                 ? 'bg-emerald-500 text-white border-emerald-400' 
+                : toast.type === 'warning'
+                ? 'bg-amber-500 text-white border-amber-400'
                 : 'bg-red-500 text-white border-red-400'
             }`}
           >

@@ -2,12 +2,24 @@ import express from "express";
 import { sql } from "@vercel/postgres";
 import dotenv from "dotenv";
 import cors from "cors";
+import nodemailer from "nodemailer";
 
 dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
+// Nodemailer transporter setup
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: parseInt(process.env.SMTP_PORT || '587'),
+  secure: process.env.SMTP_SECURE === 'true',
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+});
 
 // Request logging middleware
 app.use((req, res, next) => {
@@ -32,15 +44,23 @@ async function ensureSchema() {
         email TEXT UNIQUE NOT NULL,
         photo TEXT,
         pin TEXT NOT NULL,
-        active BOOLEAN DEFAULT TRUE
+        active BOOLEAN DEFAULT TRUE,
+        security_question TEXT,
+        security_answer TEXT,
+        role TEXT DEFAULT 'VIEWER',
+        last_login TIMESTAMP
       )
     `;
 
-    // Add active column if it doesn't exist
+    // Add new columns if they don't exist
     try {
       await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE`;
+      await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS security_question TEXT`;
+      await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS security_answer TEXT`;
+      await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'VIEWER'`;
+      await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login TIMESTAMP`;
     } catch (e) {
-      // Column might already exist
+      // Columns might already exist
     }
 
     // Articles table
@@ -234,10 +254,21 @@ app.get("/api/test", (req, res) => {
 
 // Auth Endpoints
 app.post("/api/login", async (req, res) => {
-  const { pin } = req.body;
+  const { pin, email } = req.body;
   try {
-    const { rows } = await sql`SELECT id, name, email, photo FROM users WHERE pin = ${pin}`;
+    let query;
+    if (email) {
+      query = sql`SELECT id, name, email, photo, role, active FROM users WHERE pin = ${pin} AND email = ${email}`;
+    } else {
+      query = sql`SELECT id, name, email, photo, role, active FROM users WHERE pin = ${pin}`;
+    }
+    const { rows } = await query;
     if (rows.length > 0) {
+      if (rows[0].active === false) {
+        return res.status(401).json({ error: "Utilizador desativado" });
+      }
+      // Update last login
+      await sql`UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ${rows[0].id}`;
       res.json(rows[0]);
     } else {
       res.status(401).json({ error: "PIN inválido" });
@@ -248,14 +279,21 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.post("/api/users", async (req, res) => {
-  const { name, email, photo, pin } = req.body;
+  const { name, email, photo, pin, security_question, security_answer, role } = req.body;
   try {
+    // Check if PIN already exists
+    const { rows: pinCheck } = await sql`SELECT id FROM users WHERE pin = ${pin}`;
+    let warning = null;
+    if (pinCheck.length > 0) {
+      warning = "Este PIN já está a ser utilizado por outro utilizador.";
+    }
+
     const { rows } = await sql`
-      INSERT INTO users (name, email, photo, pin) 
-      VALUES (${name}, ${email}, ${photo}, ${pin}) 
+      INSERT INTO users (name, email, photo, pin, security_question, security_answer, role) 
+      VALUES (${name}, ${email}, ${photo}, ${pin}, ${security_question}, ${security_answer}, ${role || 'VIEWER'}) 
       RETURNING id
     `;
-    res.json({ id: rows[0].id });
+    res.json({ id: rows[0].id, warning });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -263,7 +301,7 @@ app.post("/api/users", async (req, res) => {
 
 app.get("/api/users", async (req, res) => {
   try {
-    const { rows } = await sql`SELECT id, name, email, photo, active FROM users ORDER BY name ASC`;
+    const { rows } = await sql`SELECT id, name, email, photo, active, role, security_question, security_answer, last_login FROM users ORDER BY name ASC`;
     res.json(rows);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -272,22 +310,31 @@ app.get("/api/users", async (req, res) => {
 
 app.put("/api/users/:id", async (req, res) => {
   const { id } = req.params;
-  const { name, email, photo, pin, active } = req.body;
+  const { name, email, photo, pin, active, security_question, security_answer, role } = req.body;
   try {
+    let warning = null;
     if (pin) {
+      // Check if PIN already exists for another user
+      const { rows: pinCheck } = await sql`SELECT id FROM users WHERE pin = ${pin} AND id != ${id}`;
+      if (pinCheck.length > 0) {
+        warning = "Este PIN já está a ser utilizado por outro utilizador.";
+      }
+
       await sql`
         UPDATE users 
-        SET name = ${name}, email = ${email}, photo = ${photo}, pin = ${pin}, active = ${active}
+        SET name = ${name}, email = ${email}, photo = ${photo}, pin = ${pin}, active = ${active}, 
+            security_question = ${security_question}, security_answer = ${security_answer}, role = ${role}
         WHERE id = ${id}
       `;
     } else {
       await sql`
         UPDATE users 
-        SET name = ${name}, email = ${email}, photo = ${photo}, active = ${active}
+        SET name = ${name}, email = ${email}, photo = ${photo}, active = ${active},
+            security_question = ${security_question}, security_answer = ${security_answer}, role = ${role}
         WHERE id = ${id}
       `;
     }
-    res.json({ success: true });
+    res.json({ success: true, warning });
   } catch (e: any) {
     res.status(400).json({ error: e.message });
   }
@@ -313,6 +360,43 @@ app.delete("/api/users/:id", async (req, res) => {
 });
 
 // PIN Recovery Endpoints
+app.post("/api/auth/get-recovery-question", async (req, res) => {
+  const { email } = req.body;
+  try {
+    const { rows } = await sql`SELECT security_question FROM users WHERE email = ${email}`;
+    if (rows.length === 0) {
+      return res.status(400).json({ error: "Utilizador não encontrado." });
+    }
+    if (!rows[0].security_question) {
+      return res.status(400).json({ error: "Este utilizador não tem uma pergunta de segurança configurada. Contacte o administrador." });
+    }
+    res.json({ question: rows[0].security_question });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/auth/verify-recovery-answer", async (req, res) => {
+  const { email, answer } = req.body;
+  try {
+    const { rows } = await sql`SELECT * FROM users WHERE email = ${email}`;
+    if (rows.length === 0) {
+      return res.status(400).json({ error: "Utilizador não encontrado." });
+    }
+    
+    if (rows[0].security_answer?.toLowerCase().trim() === answer?.toLowerCase().trim()) {
+      // Return user data (excluding sensitive fields if necessary, but here we need to edit)
+      const user = rows[0];
+      delete user.pin; // Don't send the current PIN
+      res.json({ success: true, user });
+    } else {
+      res.status(400).json({ error: "Resposta incorreta." });
+    }
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post("/api/auth/forgot-pin", async (req, res) => {
   const { email } = req.body;
   console.log(`[RECOVERY] Request for email: ${email}`);
@@ -334,6 +418,39 @@ app.post("/api/auth/forgot-pin", async (req, res) => {
     await sql`INSERT INTO reset_codes (email, code, expires_at) VALUES (${email}, ${code}, ${expiresAt})`;
 
     console.log(`[RECOVERY] To: ${email} | Code: ${code}`);
+
+    // Send real email
+    if (process.env.SMTP_HOST && process.env.SMTP_USER) {
+      try {
+        await transporter.sendMail({
+          from: process.env.SMTP_FROM || `"A2R Inventory" <${process.env.SMTP_USER}>`,
+          to: email,
+          subject: "Código de Recuperação de PIN - A2R Inventory",
+          text: `O seu código de recuperação é: ${code}. Este código expira em 15 minutos.`,
+          html: `
+            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; rounded: 12px;">
+              <h2 style="color: #003366; text-align: center;">Recuperação de PIN</h2>
+              <p>Olá,</p>
+              <p>Recebemos um pedido para recuperar o PIN da sua conta no <strong>A2R Inventory</strong>.</p>
+              <div style="background-color: #f8fafc; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;">
+                <span style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #003366;">${code}</span>
+              </div>
+              <p style="color: #64748b; font-size: 14px;">Este código é válido por 15 minutos. Se não solicitou esta recuperação, por favor ignore este email.</p>
+              <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+              <p style="font-size: 12px; color: #94a3b8; text-align: center;">&copy; 2026 A2R Inventory. Todos os direitos reservados.</p>
+            </div>
+          `,
+        });
+        console.log(`[RECOVERY] Email sent successfully to ${email}`);
+      } catch (mailError) {
+        console.error(`[RECOVERY] Failed to send email:`, mailError);
+        // We don't fail the request here so the user can still see the code in logs if in dev
+        // but in prod it would be an issue.
+      }
+    } else {
+      console.warn("[RECOVERY] SMTP not configured. Email not sent.");
+    }
+
     res.json({ success: true, message: "Código de recuperação enviado para o seu email." });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

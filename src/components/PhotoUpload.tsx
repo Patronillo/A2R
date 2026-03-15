@@ -32,7 +32,7 @@ export const PhotoUpload: React.FC<PhotoUploadProps> = ({ onPhotoCapture, curren
 
   return (
     <div className="space-y-2">
-      <label className="block text-sm font-medium text-slate-700">{label}</label>
+      {label && <label className="block text-sm font-medium text-slate-700">{label}</label>}
       <div className="flex items-center gap-4">
         <div className="relative w-24 h-24 bg-slate-100 rounded-xl border-2 border-dashed border-slate-300 flex items-center justify-center overflow-hidden group">
           {preview ? (

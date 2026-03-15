@@ -1,3 +1,5 @@
+export type UserRole = 'ADMIN' | 'EDITOR' | 'VIEWER';
+
 export interface User {
   id: number;
   name: string;
@@ -5,6 +7,9 @@ export interface User {
   photo: string | null;
   pin: string;
   active: boolean;
+  security_question: string | null;
+  security_answer: string | null;
+  role: UserRole;
 }
 
 export interface Article {
